@@ -173,6 +173,39 @@ def test_walks_round_the_ball_when_on_the_wrong_side():
     assert w.min_ball_gap > 0.12        # never walked through the ball
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+def test_reversal_after_the_ball_leaves_the_arena(lazy):
+    # The duck followed the ball outwards and stands on its inner side; the next
+    # aim is back home, i.e. straight through the duck. It must orbit round the
+    # ball at a distance, not walk into it, and still kick.
+    w = IdealWorld(duck_xy=(1.3, 0.05), yaw=0.0, ball_xy=(1.7, 0.0), lazy=lazy)
+    brain = play(w, 60 if lazy else 30, feet=("left", "right"))
+    assert brain.events["kicks"], "never kicked"
+    assert brain.events["kicks"][0]["aim_mode"] == "home"
+    assert w.min_ball_gap > 0.2, w.min_ball_gap
+
+
+def test_orbit_route_goes_the_short_way_and_clears_the_ball():
+    b = KickBrain(KickParams(), ["right"])
+    ball = np.zeros(2)
+    b.aim, b.aim_from = np.array([1.0, 0.0]), ball      # kick towards +x
+    # The duck is in front of the ball, a little to its left (+y): the short way
+    # round is anticlockwise, over the left side.
+    s = Snapshot(0.0, np.array([0.35, 0.1]), math.pi, ball, 0.0, False, False)
+    b._approach(s)
+    assert b._orbit_dir == 1.0
+    route = b.plan[1:-2]                       # the orbit points (the last two are pre-stance, stance)
+    assert all(p[1] >= -1e-9 for p in route)   # stays on the left side
+    assert min(np.linalg.norm(p - ball) for p in route) > 0.35
+    assert b.plan[-1] == pytest.approx(b.stance_for(ball, "right"))
+    # Straight in when it's already on the line behind the ball (a fresh brain: not mid-orbit).
+    b = KickBrain(KickParams(), ["right"])
+    b.aim, b.aim_from = np.array([1.0, 0.0]), ball
+    pre = b.stance_for(ball, "right") - KickParams().standoff * b.aim
+    b._approach(Snapshot(0.0, pre - 0.3 * b.aim, 0.0, ball, 0.0, False, False))
+    assert b._orbit_dir == 0.0 and len(b.plan) == 3
+
+
 @pytest.mark.parametrize("foot", ["left", "right"])
 def test_picks_the_foot_whose_stance_is_nearer(foot):
     b = KickBrain(KickParams(), ["left", "right"])
