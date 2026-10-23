@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+env/
+.conda/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Secrets
+.env
+*.pem
+*.key
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# RL / simulation outputs
+runs/
+logs/
+outputs/
+wandb/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.onnx
+videos/
+*.mp4
