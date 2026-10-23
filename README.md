@@ -36,8 +36,8 @@ on first run. If that fails, grab an ONNX policy yourself and pass `--policy pat
 ### Watch it live
 
 ```bash
+uv run fetch/chase_ball.py             # Windows / Linux
 uv run mjpython fetch/chase_ball.py    # macOS (the MuJoCo viewer needs mjpython)
-uv run fetch/chase_ball.py             # Linux / Windows
 ```
 
 What you're seeing in the viewer:
@@ -62,7 +62,7 @@ Saves to `runs/chase_<time>/`:
 
 - `topdown.png`: bird's-eye map: the duck's path coloured by time, numbered ball spawns, ★ where each ball was reached, ✕ falls
 - `timeseries.png`: distance to the ball, plus **commanded vs achieved** forward speed and turn rate (how well the legs follow the brain)
-- `chase.mp4`: video with all the markers drawn in
+- `video.mp4`: video with all the markers drawn in
 - `summary.json`: balls reached, average time to reach, falls; `log.csv`: every step
 
 ### Things to try
@@ -71,8 +71,45 @@ Saves to `runs/chase_<time>/`:
 - `--no-bam` swaps Pollen's realistic servo model for ideal PD servos. Compare how much worse/better it gets.
 - `uv run pytest` checks the brain against an ideal walker (if it can't catch the ball with perfect legs, it won't with real ones).
 
+## Kick loop: the duck plays football against itself
+
+A separate game. The duck walks round behind the ball, shuffles until the ball
+sits exactly in front of one foot, stands still, then swaps in Pollen's **kick
+policy**. Roll the ball into the goal it's attacking to score; then it attacks
+the other end.
+
+```bash
+uv run kick/kick_loop.py                                  # watch live (macOS: uv run mjpython ...)
+uv run kick/kick_loop.py --headless --duration 180 --video
+```
+
+The kick policy is **blind**: it never sees the ball, and was trained with the
+ball 9 cm ahead and 4.2 cm to the side of the trunk (±1.5 cm). So lining up is
+the whole game. The brain (`kick/brain.py`) is a state machine:
+APPROACH → ALIGN → SETTLE → KICK → WATCH (+ RECOVER after falls).
+
+| Marker | Meaning |
+|---|---|
+| yellow disc | the goal being attacked (grey = the other one) |
+| yellow line | ball → goal: the line it's lining up on |
+| small red/green disc | the kick spot in front of the foot: **green when the ball is on it** |
+| white dot + arrow | where the duck needs to stand, and which way to face |
+| blue dot | where it's walking to right now |
+| arrow from the duck | the command (colour = state: blue approach, yellow align, red kick) |
+| white / orange dots | duck and ball trails |
+
+Headless runs save `topdown.png` (every kick as an arrow coloured by ball speed),
+`alignment.png` (where the ball was at each kick, drawn over the feet: does
+precision matter?) and `timeline.png` (what the brain was doing, line-up error,
+ball speed).
+
+Options: `--assist` nudges the ball onto the spot when the duck gets close
+(Pollen's own demo always does this), `--feet right` uses one foot only,
+`--tolerance 0.02` makes it less fussy, `--follow` makes the camera follow the duck.
+
 ## Roadmap
 
+Fetch:
 - [x] **Stage 0**: hand-coded chaser on top of Pollen's walking policy
 - [ ] **Stage 1**: replace the chaser with a small learned policy (reward = getting closer)
 - [ ] **Stage 2**: grab the ball with the beak
@@ -80,15 +117,27 @@ Saves to `runs/chase_<time>/`:
 - [ ] **Stage 4**: glue it together: find → approach → grab → return → drop
 - [ ] **Stage 5**: real robot: camera + colour detector instead of the sim's ball position
 
+Also:
+- [x] **Kick loop**
+
+Detailed plans, design notes, known unknowns and a log are in **[plans.md](plans.md)**.
+
 ## Layout
 
 ```
+common/
+├── sim.py          # shared: finds Pollen's code + policies, Duck wrapper, live / headless runners
+└── overlay.py      # debug markers drawn into the 3D scene
 fetch/
-├── chase_ball.py   # run it: sim setup, chase loop, live viewer / headless outputs
-├── chaser.py       # the brain: ball position -> velocity command
-├── overlay.py      # debug markers drawn into the 3D scene
-└── plots.py        # top-down map + time series
-tests/test_chaser.py
+├── chase_ball.py   # the fetch game
+├── chaser.py       # its brain: ball position -> velocity command
+└── plots.py
+kick/
+├── kick_loop.py    # the kick game
+├── brain.py        # its brain: approach / align / settle / kick / watch
+└── kick_plots.py
+tests/              # brains checked against an imaginary perfect duck (uv run pytest)
+plans.md            # roadmap + hand-over notes
 third_party/microduck_rl   # Pollen's repo (cloned, not committed)
 ```
 
