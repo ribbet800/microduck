@@ -188,6 +188,24 @@ changed (e.g. `ALIGN -> APPROACH (overshot the ball)`). The same lines are
 printed to the terminal, and `log.csv` has a `state` column for every step
 (the kick loop's `timeline.png` draws it).
 
+In the 3D scene, three markers come from the loop itself (`Game.draw`), so
+every game and every brain gets them:
+
+- **cyan**: the brain's `plan`, the route it means to walk right now (a list of
+  points from the duck, e.g. round the ball and in to the kick stance), with
+  small arrowheads along it.
+- **pink**: the command, drawn as where it would take the duck in 2 s.
+- **white**: where the duck is actually going in 2 s, from its achieved forward
+  speed and turn rate (smoothed over 0.5 s). Pink and white on the same scale is
+  the quickest way to see the legs not doing what the brain asked: dead zones,
+  the ~30% walking speed, turns that don't happen.
+
+Games add their own (the kick loop: the kick's aim, the kick spot, the arena),
+and list them in `legend`, which the viewer shows bottom-left. All colours
+are defined once, in `common/overlay.py`. Space pauses, the right arrow steps
+one tick, - / + change the playback speed (`--speed` sets it to start with, and
+makes headless videos play faster or slower).
+
 ## Adding things
 
 - **A new brain** (e.g. a learned Stage-1 chaser): any object with
