@@ -1,6 +1,7 @@
 # How it works
 
-Two games, one loop. Pollen's pre-trained policies are the **legs** and the
+Two systems, one loop: **chase**, and **kicking** (the endless kick loop, plus
+its kickback variant). Pollen's pre-trained policies are the **legs** and the
 **boot**; everything we wrote is the **brain** that decides what to send them,
 plus the game rules, the 3D markers and the plots.
 
@@ -64,7 +65,7 @@ stateDiagram-v2
 
 | Transition | Exact condition (`KickParams` defaults) |
 |---|---|
-| APPROACH → ALIGN | trunk within 3 cm of the point 20 cm behind the kick stance (not while walking round the ball) |
+| APPROACH → ALIGN | trunk within 3 cm of the pre-stance point, 20 cm behind the kick stance (reached straight or via the orbit below) |
 | ALIGN → SETTLE | facing the aim within 8° and the ball within 12 mm (0.8 × 15 mm tolerance) of the kick spot, or within 15 mm once fully walked in; held for 0.3 s while standing |
 | ALIGN → APPROACH | walked 15 mm past the stance ("overshot"); right depth and heading but ball still off the spot ("can't shuffle"); 15 s in ALIGN; or more than 32 cm from the stance ("ball got away") |
 | SETTLE → KICK | after 1 s standing: ball within 15 mm, heading within 12° |
@@ -83,6 +84,38 @@ Inside ALIGN the brain does one of: turn on the spot (facing over 15° off),
 walk in along the line steering like a car, or give up and retry. The real
 walking policy can't sidestep, walk backwards or take tiny steps, so retrying
 is the only way to fix a small miss.
+
+### Getting behind the ball: the orbit
+
+In APPROACH the duck heads for the **pre-stance point** (20 cm behind where it
+must stand to kick, on the aim line). If the straight way there would take it
+closer than 20 cm to the ball, it **orbits** instead:
+
+```mermaid
+flowchart LR
+    A["Straight route to the<br/>pre-stance point clear<br/>(stays 20 cm from the ball)?"] -- yes --> S["Walk straight there"]
+    A -- no --> O["Orbit: circle the ball 10 cm further out<br/>than the pre-stance point, the shorter way round,<br/>steering at a point 35° ahead on the circle"]
+    O -- "within 30° of the aim line" --> I["Head straight in:<br/>now along the aim, so it<br/>arrives facing the right way"]
+    S --> AL["ALIGN"]
+    I --> AL
+    classDef ours fill:#dbeafe,stroke:#2563eb,color:#0b2545
+    class A,S,O,I,AL ours
+```
+
+Near 180° (both ways round equally long) it keeps the way it started, so it
+can't dither. The route it's following, arc included, is `brain.plan`, which
+the viewer draws. Every orbit is logged in `events.json` (`orbits`). In MuJoCo
+it orbits ~5 times per 5 minutes in the kick loop, almost always for a
+reversal after the ball leaves the arena, and before every kick in kickback.
+
+## Kickback: back and forth on a line
+
+`kick/kickback.py`. The same brain with one different method,
+`KickbackBrain.pick_aim`: each kick goes **back the way the last one went**, at
+the end of a 1 m line behind the last kick's direction (the first kick goes
+away from the duck). It aims at that end from wherever the ball stopped, so a
+ball that drifted off the line is steered back towards it. Every kick then
+needs the duck to get round the ball, which is what the orbit is for.
 
 ## Chase: the brain plus the game rules
 

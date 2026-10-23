@@ -4,7 +4,8 @@ Fun experiments for a Microduck bipedal robot, built on top of Pollen Robotics'
 [microduck_rl](https://github.com/pollen-robotics/microduck_rl) training stack.
 Everything here runs in simulation, so it works before the robot arrives.
 
-Two games: **chase** (fetch, Stage 0) and the endless **kick loop**. For
+Two systems: **chase** (fetch, Stage 0) and **kicking** (the endless kick loop,
+and its kickback variant). For
 diagrams of how the brains loop through their states, and which parts are ours
 vs Pollen's pre-trained policies, see **[docs/how_it_works.md](docs/how_it_works.md)**.
 
@@ -80,8 +81,9 @@ Saves to `runs/chase_<time>/`:
 
 A separate game. Each time the ball stops, the duck picks a **random direction**
 to kick it: roughly onwards (the duck→ball direction, ±60°), or back towards the
-middle once the ball is outside a 1.5 m **soft arena**. It walks round behind
-the ball, turns to face that way, walks in along the line steering like a car
+middle once the ball is outside a 1.5 m **soft arena**. It gets behind the ball
+(orbiting round it at a safe distance when the ball is in the way, so it arrives
+facing the right way), walks in along the line steering like a car
 until the ball sits exactly in front of one foot, stands still, then swaps in
 Pollen's **kick policy**. Then it follows the ball and does it again.
 
@@ -122,6 +124,21 @@ nudges the ball onto the spot when the duck gets close (Pollen's own demo always
 does this), `--feet right` uses one foot only, `--tolerance 0.02` makes it less
 fussy, `--follow` makes the camera follow the duck.
 
+### Kickback: back and forth on a line
+
+The same brain, kicking the ball back the way it last went, between the ends of
+a 1 m line (a ball that drifts off the line is steered back to it). Every kick
+means getting round the ball, so this is the orbit's showcase.
+
+```bash
+uv run kick/kickback.py
+uv run kick/kickback.py --headless --duration 180 --video
+```
+
+`--length 1.5` makes the line longer (about one kick's roll, `--ball-roll`, works
+best); the kick loop's other options apply too. `summary.json` adds
+`mean_off_line_m`: how far from the line the kicks leave the ball.
+
 ## Roadmap
 
 Fetch:
@@ -152,7 +169,9 @@ fetch/
 └── plots.py
 kick/
 ├── kick_loop.py    # the kick game: drawing, score, plots
-├── brain.py        # its brain: approach / align / settle / kick / watch / recover
+├── kickback.py     # the same game kicking back and forth along a line
+├── brain.py        # its brain: approach (with orbit) / align / settle / kick / watch / recover,
+│                   #   and KickbackBrain (a different pick_aim)
 └── kick_plots.py
 docs/               # how_it_works.md: diagrams of the loop and both brains
 tests/              # brains checked against imaginary legs (uv run pytest)
