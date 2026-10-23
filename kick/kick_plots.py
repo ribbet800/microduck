@@ -14,32 +14,37 @@ STATE_COLOURS = {"APPROACH": "#4C78A8", "ALIGN": "#F2CF5B", "SETTLE": "#E8A33D",
                  "KICK": "#D9534F", "WATCH": "#B5B5B5", "RECOVER": "#7B3F99"}
 
 
-def _pitch(ax, p):
-    hx, hy = p.pitch_half
-    ax.add_patch(Rectangle((-hx, -hy), 2 * hx, 2 * hy, fill=False, ec="0.6", lw=1))
-    ax.axvline(0, color="0.8", lw=1, zorder=0)
-    for sgn in (-1, 1):
-        ax.add_patch(Circle((sgn * p.goal_x, 0), p.goal_radius, color="gold", alpha=0.25, zorder=0))
+def _arena(ax, p):
+    ax.add_patch(Circle((0, 0), p.arena_radius, fill=False, ec="0.6", ls="--", lw=1, zorder=0))
+    ax.plot(0, 0, "+", color="0.6", ms=10, zorder=0)
 
 
 def topdown(log, events, p, path):
-    """Bird's-eye view: duck path, ball path, every kick as an arrow (coloured by
-    how fast the ball went), goals, falls."""
-    fig, ax = plt.subplots(figsize=(10, 6.5))
-    _pitch(ax, p)
+    """Bird's-eye view: duck path, ball path, and every kick as two arrows from
+    where the ball was: where it was aimed (grey) and where it actually went
+    (coloured by ball speed), both as long as the ball travelled."""
+    fig, ax = plt.subplots(figsize=(9, 8))
+    _arena(ax, p)
     ax.plot(log["duck_x"], log["duck_y"], color="0.35", lw=0.8, label="duck path", zorder=2)
     ax.plot(log["ball_x"], log["ball_y"], color="tab:orange", lw=0.8, alpha=0.8, label="ball path", zorder=2)
 
-    kicks = [k for k in events["kicks"] if "peak_ball_speed" in k]
+    kicks = [k for k in events["kicks"] if k.get("actual_deg") is not None]
     if kicks:
         speeds = np.array([k["peak_ball_speed"] for k in kicks])
         bx = np.array([k["ball_xy"][0] for k in kicks])
         by = np.array([k["ball_xy"][1] for k in kicks])
-        ux = np.array([k["aim"][0] for k in kicks])
-        uy = np.array([k["aim"][1] for k in kicks])
-        q = ax.quiver(bx, by, ux, uy, speeds, cmap="plasma", clim=(0, max(1.2, speeds.max())),
-                      scale=12, width=0.006, zorder=4)
+        travel = np.array([k["travel_m"] for k in kicks])
+        aim = np.radians([k["aim_deg"] for k in kicks])
+        went = np.radians([k["actual_deg"] for k in kicks])
+        ax.quiver(bx, by, travel * np.cos(aim), travel * np.sin(aim), color="0.55", alpha=0.7,
+                  angles="xy", scale_units="xy", scale=1, width=0.004, zorder=3)
+        q = ax.quiver(bx, by, travel * np.cos(went), travel * np.sin(went), speeds, cmap="plasma",
+                      clim=(0, max(1.2, speeds.max())), angles="xy", scale_units="xy", scale=1,
+                      width=0.006, zorder=4)
         fig.colorbar(q, ax=ax, label="ball speed after kick (m/s)", shrink=0.8)
+        for i, k in enumerate(kicks):
+            ax.annotate(str(i + 1), k["ball_xy"], textcoords="offset points", xytext=(-9, 5), fontsize=8)
+        ax.plot([], [], color="0.55", lw=2, label="aimed")
         assisted = [k for k in kicks if k["assisted"]]
         if assisted:
             ax.scatter([k["ball_xy"][0] for k in assisted], [k["ball_xy"][1] for k in assisted],
@@ -47,17 +52,46 @@ def topdown(log, events, p, path):
     if events["falls"]:
         ax.scatter([f["x"] for f in events["falls"]], [f["y"] for f in events["falls"]],
                    marker="x", color="tab:red", s=70, lw=2.5, zorder=5, label="fell over")
-    for g in events["goals"]:
-        ax.plot(g["goal"] * p.goal_x, 0, "*", color="tab:green", ms=20, mec="k", zorder=6)
 
-    ax.set_aspect("equal")
-    ax.set_xlim(-p.pitch_half[0] - 0.2, p.pitch_half[0] + 0.2)
-    ax.set_ylim(-p.pitch_half[1] - 0.2, p.pitch_half[1] + 0.2)
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.margins(0.1)
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
-    ax.set_title(f"Kick loop from above — {len(events['goals'])} goals from {len(events['kicks'])} kicks "
-                 f"(arrows: each kick, aimed at the goal being attacked)")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=5, fontsize=8, frameon=False)
+    ax.set_title(f"Kick loop from above — {len(events['kicks'])} kicks\n"
+                 "grey arrow = where it was aimed, coloured arrow = where the ball went; dashed = soft arena")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.08), ncol=5, fontsize=8, frameon=False)
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
+
+
+def aiming(events, path):
+    """How well does 'face that way, then kick blind' send the ball where it was aimed?"""
+    kicks = [k for k in events["kicks"] if k.get("aim_err_deg") is not None]
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    ax = axes[0]
+    if kicks:
+        errs = [k["aim_err_deg"] for k in kicks]
+        ax.hist(errs, bins=np.arange(-60, 61, 5), color="tab:blue", edgecolor="k", lw=0.5)
+        ax.axvline(0, color="k", lw=1)
+        ax.set_title(f"Where it went minus where it was aimed\n(mean |error| {np.mean(np.abs(errs)):.0f}°, "
+                     f"{len(errs)} kicks; + = to the left)")
+    else:
+        ax.set_title("No finished kicks")
+    ax.set_xlabel("direction error (°)")
+    ax.set_ylabel("kicks")
+    ax.grid(alpha=0.3)
+
+    ax = axes[1]
+    if kicks:
+        colours = ["tab:purple" if k["assisted"] else "tab:blue" for k in kicks]
+        ax.scatter([1000 * k["err_m"] for k in kicks], [k["aim_err_deg"] for k in kicks],
+                   c=colours, s=40, edgecolors="k", lw=0.5)
+    ax.axhline(0, color="k", lw=1)
+    ax.set_xlabel("line-up error at kick (mm)")
+    ax.set_ylabel("direction error (°)")
+    ax.set_title("Does a sloppier line-up send it off course?\n(purple = assisted)")
+    ax.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
     plt.close(fig)
@@ -149,10 +183,8 @@ def timeline(log, events, p, path):
     for ax in axes[1:]:
         for k in events["kicks"]:
             ax.axvline(k["t"], color="tab:red", alpha=0.4, lw=1)
-        for g in events["goals"]:
-            ax.axvline(g["t"], color="tab:green", alpha=0.8, lw=2)
         ax.grid(alpha=0.3)
-    axes[1].set_title("Red lines: kicks   ·   Green lines: goals", fontsize=10)
+    axes[1].set_title("Red lines: kicks", fontsize=10)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
     plt.close(fig)

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Kick loop: the duck plays football against itself.
+"""Kick loop: the duck walks up to the ball, kicks it, follows it, kicks it again.
 
 Pollen's walking policy is the legs and Pollen's kick policy is the boot. The
-brain (kick/brain.py) walks round behind the ball, walks in along the line to
-the goal until the ball is exactly in front of a foot, stands still, swaps in the kick policy, watches
-where the ball goes, and does it all again. Score by rolling the ball into the
-goal it's attacking; then it attacks the other end.
+brain (kick/brain.py) picks a random direction for each kick (roughly onwards
+from where the duck is, and back towards the middle once the ball strays
+outside the arena), walks round behind the ball, walks in along that line until
+the ball is exactly in front of a foot, stands still, swaps in the kick policy,
+watches where the ball goes, and does it all again.
 
   Live:      uv run kick/kick_loop.py            (macOS: uv run mjpython kick/kick_loop.py)
   Headless:  uv run kick/kick_loop.py --headless --duration 180 --video
@@ -18,6 +19,7 @@ the exact spot (Pollen's own demo always does this).
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -47,10 +49,10 @@ class KickLoop:
         self.duck_trail: list = []
         self.ball_trail: list = []
         self.camera = ({"track": True, "distance": 1.8, "elevation": -40, "azimuth": 135} if follow else
-                       {"track": False, "lookat": [0.0, 0.0, 0.0], "distance": 3.6, "elevation": -60, "azimuth": 90})
+                       {"track": False, "lookat": [0.0, 0.0, 0.0], "distance": 4.2, "elevation": -60, "azimuth": 90})
         self.log = {k: [] for k in ("t", "state", "duck_x", "duck_y", "duck_z", "duck_yaw", "ball_x", "ball_y",
-                                    "ball_speed", "align_err", "heading_err", "cmd_vx", "cmd_vy", "cmd_wz",
-                                    "score")}
+                                    "ball_speed", "aim_deg", "align_err", "heading_err",
+                                    "cmd_vx", "cmd_vy", "cmd_wz")}
 
     @property
     def events(self):
@@ -84,11 +86,13 @@ class KickLoop:
 
         x, y = d.xy
         bx, by, _ = d.ball
+        lined_up = b.state in ("ALIGN", "SETTLE")
         for k, v in (("t", self.t), ("state", b.state), ("duck_x", x), ("duck_y", y), ("duck_z", d.z),
                      ("duck_yaw", d.yaw), ("ball_x", bx), ("ball_y", by), ("ball_speed", d.ball_speed),
-                     ("align_err", b.align_err if b.state in ("ALIGN", "SETTLE") else float("nan")),
-                     ("heading_err", b.heading_err if b.state in ("ALIGN", "SETTLE") else float("nan")),
-                     ("cmd_vx", act.cmd[0]), ("cmd_vy", act.cmd[1]), ("cmd_wz", act.cmd[2]), ("score", b.score)):
+                     ("aim_deg", b.aim_deg),
+                     ("align_err", b.align_err if lined_up else float("nan")),
+                     ("heading_err", b.heading_err if lined_up else float("nan")),
+                     ("cmd_vx", act.cmd[0]), ("cmd_vy", act.cmd[1]), ("cmd_wz", act.cmd[2])):
             self.log[k].append(v if k == "state" else float(v))
         if int(round(self.t / sim.CONTROL_DT)) % 5 == 0:
             self.duck_trail = (self.duck_trail + [(float(x), float(y))])[-150:]
@@ -97,23 +101,23 @@ class KickLoop:
     # -- drawing ------------------------------------------------------------------
     def draw(self, scn):
         d, b, p = self.duck, self.brain, self.brain.p
-        # Pitch: halfway line, both goals (the one being attacked is bright).
-        hx, hy = p.pitch_half
-        for (ax, ay), (bx_, by_) in (((-hx, -hy), (hx, -hy)), ((hx, -hy), (hx, hy)),
-                                      ((hx, hy), (-hx, hy)), ((-hx, hy), (-hx, -hy)), ((0, -hy), (0, hy))):
-            overlay.line(scn, (ax, ay), (bx_, by_), (1, 1, 1, 0.35), width=2.0, z=0.003)
-        for sgn in (-1, 1):
-            on = sgn == b.attack
-            overlay.disc(scn, (sgn * p.goal_x, 0.0), p.goal_radius,
-                         (1.0, 0.85, 0.1, 0.35) if on else (1, 1, 1, 0.12))
+        # The soft arena: outside this circle, kicks aim back towards the middle.
+        n = 48
+        for i in range(n):
+            a0, a1 = 2 * math.pi * i / n, 2 * math.pi * (i + 1) / n
+            overlay.line(scn, (p.arena_radius * math.cos(a0), p.arena_radius * math.sin(a0)),
+                         (p.arena_radius * math.cos(a1), p.arena_radius * math.sin(a1)),
+                         (1, 1, 1, 0.3), width=2.0, z=0.003)
         ball = d.ball[:2]
-        # Where it's aiming: ball -> goal.
-        overlay.line(scn, ball, b.goal_xy, (1.0, 0.85, 0.1, 0.6), width=2.0)
-        # Where it's walking to right now, and the kick stance (ghost marker + facing arrow).
-        if b.state in ("APPROACH",):
-            overlay.sphere(scn, (b.target[0], b.target[1], 0.01), 0.012, overlay.BLUE)
-        overlay.sphere(scn, (b.stance[0], b.stance[1], 0.01), 0.01, (1, 1, 1, 0.7))
-        overlay.arrow(scn, b.stance, b.stance + 0.12 * b.aim, (1, 1, 1, 0.5), width=0.005, z=0.01)
+        # Where it's aiming the next kick.
+        if b.aim is not None:
+            colour = (1.0, 0.55, 0.0, 0.7) if b.aim_mode == "home" else (1.0, 0.85, 0.1, 0.7)
+            overlay.line(scn, ball, ball + 0.6 * b.aim, colour, width=2.0)
+            # Where it's walking to right now, and the kick stance (ghost marker + facing arrow).
+            if b.state == "APPROACH":
+                overlay.sphere(scn, (b.target[0], b.target[1], 0.01), 0.012, overlay.BLUE)
+            overlay.sphere(scn, (b.stance[0], b.stance[1], 0.01), 0.01, (1, 1, 1, 0.7))
+            overlay.arrow(scn, b.stance, b.stance + 0.12 * b.aim, (1, 1, 1, 0.5), width=0.005, z=0.01)
         # The kick spot in front of the duck's foot: green when the ball is on it.
         spot = b.spot_world(Snapshot(self.t, d.xy, d.yaw, ball, 0, False, False))
         on_spot = np.linalg.norm(spot - ball) < p.tolerance
@@ -127,10 +131,14 @@ class KickLoop:
         kicks = b.events["kicks"]
         assisted = sum(k["assisted"] for k in kicks)
         err = f"{b.align_err * 1000:.0f} mm, {np.degrees(b.heading_err):+.0f}°" if b.state in ("ALIGN", "SETTLE") else "-"
+        done = [k for k in kicks if k.get("aim_err_deg") is not None]
+        last = (f"aimed {done[-1]['aim_deg']:+.0f}°, went {done[-1]['actual_deg']:+.0f}°, "
+                f"{done[-1]['travel_m']:.2f} m") if done else "-"
         return [("time", f"{self.t:.1f} s"),
                 ("state", f"{b.state} ({b.foot} foot)"),
-                ("goals", str(b.score)),
+                ("next aim", f"{b.aim_deg:+.0f}°" + (" (home)" if b.aim_mode == "home" else "") if b.aim is not None else "-"),
                 ("kicks", f"{len(kicks)}" + (f" ({assisted} assisted)" if assisted else "")),
+                ("last kick", last),
                 ("falls", str(len(b.events["falls"]))),
                 ("line-up error", err)]
 
@@ -138,25 +146,31 @@ class KickLoop:
     def summary(self):
         b = self.brain
         kicks = b.events["kicks"]
-        speeds = [k["peak_ball_speed"] for k in kicks if "peak_ball_speed" in k]
+        done = [k for k in kicks if "peak_ball_speed" in k]
+        speeds = [k["peak_ball_speed"] for k in done]
+        aim_errs = [abs(k["aim_err_deg"]) for k in done if k.get("aim_err_deg") is not None]
         return {"sim_seconds": round(self.t, 2),
-                "goals": b.score,
                 "kicks": len(kicks),
+                "kicks_per_min": round(60 * len(kicks) / max(self.t, 1e-6), 2),
                 "assisted_kicks": sum(k["assisted"] for k in kicks),
                 "whiffs": sum(1 for s in speeds if s < 0.2),
                 "mean_ball_speed_m_s": round(float(np.mean(speeds)), 2) if speeds else None,
+                "mean_travel_m": round(float(np.mean([k["travel_m"] for k in done])), 2) if done else None,
+                "mean_abs_aim_error_deg": round(float(np.mean(aim_errs)), 1) if aim_errs else None,
                 "mean_lineup_error_mm": round(1000 * float(np.mean([k["err_m"] for k in kicks])), 1) if kicks else None,
+                "home_aims": sum(1 for k in kicks if k["aim_mode"] == "home"),
                 "falls": len(b.events["falls"]),
-                "outs": len(b.events["outs"]),
                 "line_up_retries": len(b.events["retries"]),
-                "params": {k: (list(v) if isinstance(v, tuple) else v) for k, v in vars(b.p).items()}}
+                "timeouts": len(b.events["timeouts"]),
+                "params": vars(b.p)}
 
     def plots(self, out_dir):
         p = self.brain.p
         kick_plots.topdown(self.log, self.events, p, str(out_dir / "topdown.png"))
         kick_plots.alignment(self.events, p, str(out_dir / "alignment.png"))
+        kick_plots.aiming(self.events, str(out_dir / "aiming.png"))
         kick_plots.timeline(self.log, self.events, p, str(out_dir / "timeline.png"))
-        return ["topdown.png", "alignment.png", "timeline.png"]
+        return ["topdown.png", "alignment.png", "aiming.png", "timeline.png"]
 
 
 def main():
@@ -167,7 +181,11 @@ def main():
     ap.add_argument("--feet", choices=["both", "left", "right"], default="both")
     ap.add_argument("--assist", action="store_true", help="nudge the ball onto the kick spot when close")
     ap.add_argument("--tolerance", type=float, default=KickParams.tolerance, help="line-up tolerance (m)")
-    ap.add_argument("--follow", action="store_true", help="camera follows the duck instead of showing the pitch")
+    ap.add_argument("--aim-spread", type=float, default=math.degrees(KickParams.aim_spread),
+                    help="random aim: up to this many degrees either side of straight on")
+    ap.add_argument("--arena", type=float, default=KickParams.arena_radius,
+                    help="soft arena radius (m): outside it, kicks aim back towards the middle")
+    ap.add_argument("--follow", action="store_true", help="camera follows the duck instead of showing the arena")
     args = ap.parse_args()
 
     rl_repo = sim.find_rl_repo(args.rl_repo)
@@ -187,11 +205,13 @@ def main():
     model, data, bam_ctrl, policy = sim.build_sim(ip, rl_repo, walk, use_bam=not args.no_bam,
                                                   kick_left=paths.get("left"), kick_right=paths.get("right"))
     duck = sim.Duck(model, data, bam_ctrl, policy, np.random.default_rng(args.seed))
-    brain = KickBrain(KickParams(assist=args.assist, tolerance=args.tolerance), feet)
+    params = KickParams(assist=args.assist, tolerance=args.tolerance,
+                        aim_spread=math.radians(args.aim_spread), arena_radius=args.arena)
+    brain = KickBrain(params, feet, rng=np.random.default_rng(args.seed))
     game = KickLoop(duck, brain, follow=args.follow)
     game.start()
 
-    print("\nKick-off! " + ("(headless)" if args.headless else "Close the viewer window to stop."))
+    print("\nKicking about! " + ("(headless)" if args.headless else "Close the viewer window to stop."))
     if args.headless:
         sim.run_headless(duck, game, args.duration, sim.default_out("kick", args.out), args.video)
     else:

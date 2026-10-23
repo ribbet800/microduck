@@ -72,42 +72,47 @@ Saves to `runs/chase_<time>/`:
 - `--no-bam` swaps Pollen's realistic servo model for ideal PD servos. Compare how much worse/better it gets.
 - `uv run pytest` checks the brain against an ideal walker (if it can't catch the ball with perfect legs, it won't with real ones).
 
-## Kick loop: the duck plays football against itself
+## Kick loop: walk up, kick, follow, kick again
 
-A separate game. The duck walks round behind the ball, turns to face the goal,
-walks in along the ball→goal line steering like a car until the ball sits
-exactly in front of one foot, stands still, then swaps in Pollen's **kick
-policy**. Roll the ball into the goal it's attacking to score; then it attacks
-the other end.
+A separate game. Each time the ball stops, the duck picks a **random direction**
+to kick it: roughly onwards (the duck→ball direction, ±60°), or back towards the
+middle once the ball is outside a 1.5 m **soft arena**. It walks round behind
+the ball, turns to face that way, walks in along the line steering like a car
+until the ball sits exactly in front of one foot, stands still, then swaps in
+Pollen's **kick policy**. Then it follows the ball and does it again.
 
 ```bash
 uv run kick/kick_loop.py                                  # watch live (macOS: uv run mjpython ...)
 uv run kick/kick_loop.py --headless --duration 180 --video
 ```
 
-The kick policy is **blind**: it never sees the ball, and was trained with the
-ball 9 cm ahead and 4.2 cm to the side of the trunk (±1.5 cm). So lining up is
-the whole game. The brain (`kick/brain.py`) is a state machine:
+The kick policy is **blind**: it never sees the ball, kicks straight ahead, and
+was trained with the ball 9 cm ahead and 4.2 cm to the side of the trunk
+(±1.5 cm). So the kick's direction is just which way the duck faces, and lining
+up is the whole game. The brain (`kick/brain.py`) is a state machine:
 APPROACH → ALIGN → SETTLE → KICK → WATCH (+ RECOVER after falls).
 
 | Marker | Meaning |
 |---|---|
-| yellow disc | the goal being attacked (grey = the other one) |
-| yellow line | ball → goal: the line it's lining up on |
+| dashed white circle | the soft arena |
+| yellow line from the ball | the next kick's aim (orange = heading back to the middle) |
 | small red/green disc | the kick spot in front of the foot: **green when the ball is on it** |
 | white dot + arrow | where the duck needs to stand, and which way to face |
 | blue dot | where it's walking to right now |
 | arrow from the duck | the command (colour = state: blue approach, yellow align, red kick) |
 | white / orange dots | duck and ball trails |
 
-Headless runs save `topdown.png` (every kick as an arrow coloured by ball speed),
-`alignment.png` (where the ball was at each kick, drawn over the feet: does
-precision matter?) and `timeline.png` (what the brain was doing, line-up error,
-ball speed).
+Headless runs save `topdown.png` (every kick as two arrows: where it was aimed
+and where the ball actually went), `aiming.png` (direction error per kick, and
+whether a sloppier line-up sends it further off course), `alignment.png` (where
+the ball was at each kick, drawn over the feet) and `timeline.png` (what the
+brain was doing, line-up error, ball speed).
 
-Options: `--assist` nudges the ball onto the spot when the duck gets close
-(Pollen's own demo always does this), `--feet right` uses one foot only,
-`--tolerance 0.02` makes it less fussy, `--follow` makes the camera follow the duck.
+Options: `--aim-spread 30` makes the random aims tamer, `--arena 1.0` a smaller
+arena, `--seed` picks a different (repeatable) sequence of aims, `--assist`
+nudges the ball onto the spot when the duck gets close (Pollen's own demo always
+does this), `--feet right` uses one foot only, `--tolerance 0.02` makes it less
+fussy, `--follow` makes the camera follow the duck.
 
 ## Roadmap
 

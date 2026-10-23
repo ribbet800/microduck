@@ -3,7 +3,7 @@
 The ideal duck moves exactly as commanded (forward, sideways, turn) and has a
 "kick" that launches the ball straight ahead at 1 m/s — but only if the ball is
 genuinely on the kick spot, like Pollen's blind kick policy. If the brain can't
-score with perfect legs, it won't with real ones.
+kick well with perfect legs, it won't with real ones.
 
 `lazy=True` gives it legs like Pollen's velstand in MuJoCo instead (see
 `lazy_legs`): a big dead zone, no sidestep, no walking backwards, ~30% speed.
@@ -49,6 +49,7 @@ class IdealWorld:
         self.rng = np.random.default_rng(seed)
         self.kick_noise = kick_noise
         self.min_ball_gap = np.inf
+        self.max_ball_r = 0.0
 
     def snap(self):
         return Snapshot(self.t, self.duck.copy(), self.yaw, self.ball.copy(),
@@ -82,21 +83,63 @@ class IdealWorld:
             self.ball_v *= max(0.0, sp - 0.4 * DT) / sp
         self.ball += self.ball_v * DT
         self.t += DT
+        self.max_ball_r = max(self.max_ball_r, float(np.linalg.norm(self.ball)))
         if brain.state == "APPROACH" and not brain.events["kicks"]:
             self.min_ball_gap = min(self.min_ball_gap, np.linalg.norm(self.duck - self.ball))
 
 
-def play(world, seconds, params=None, feet=("right",)):
-    brain = KickBrain(params or KickParams(), list(feet))
+def play(world, seconds, params=None, feet=("right",), seed=0):
+    brain = KickBrain(params or KickParams(), list(feet), rng=np.random.default_rng(seed))
     for _ in range(int(seconds / DT)):
         act = brain.update(world.snap())
         world.apply(act, brain)
     return brain
 
 
+def finished(brain):
+    return [k for k in brain.events["kicks"] if k.get("aim_err_deg") is not None]
+
+
+def snap_at(duck_xy, ball_xy):
+    return Snapshot(0.0, np.array(duck_xy, float), 0.0, np.array(ball_xy, float), 0.0, False, False)
+
+
+# -- aiming ---------------------------------------------------------------------
+
+def test_aims_are_random_and_roughly_onwards():
+    # Inside the arena: duck->ball direction (here +x) give or take aim_spread.
+    b = KickBrain(KickParams(), ["right"], rng=np.random.default_rng(1))
+    angles = []
+    for _ in range(300):
+        b.pick_aim(snap_at((-0.5, 0.0), (0.0, 0.0)))
+        angles.append(b.aim_deg)
+        assert b.aim_mode == "free"
+    assert max(abs(a) for a in angles) <= 60 + 1e-9
+    assert min(angles) < -45 and max(angles) > 45      # really spread out, both ways
+
+
+def test_aims_back_home_outside_the_arena():
+    b = KickBrain(KickParams(), ["right"], rng=np.random.default_rng(2))
+    for _ in range(300):
+        # Ball out to the right of the arena, duck behind it pointing further out.
+        b.pick_aim(snap_at((1.5, 0.0), (2.0, 0.0)))
+        assert b.aim_mode == "home"
+        off = abs((b.aim_deg - 180 + 180) % 360 - 180)  # angle from straight home (-x)
+        assert off <= 45 + 1e-9
+
+
+def test_same_seed_same_aims():
+    def aims(seed):
+        brain = play(IdealWorld(), 60, seed=seed)
+        return [k["aim_deg"] for k in brain.events["kicks"]]
+    assert aims(7) == aims(7)
+    assert aims(7) != aims(8)
+
+
 def test_stance_puts_ball_on_the_spot():
     b = KickBrain(KickParams(), ["right", "left"])
     ball = np.array([0.3, -0.2])
+    b.pick_aim(snap_at((0.0, 0.0), ball))
     for foot in ("right", "left"):
         stance, a = b.stance_for(ball, foot)
         yaw = math.atan2(a[1], a[0])
@@ -104,6 +147,8 @@ def test_stance_puts_ball_on_the_spot():
         rel = [math.cos(yaw) * d[0] + math.sin(yaw) * d[1], -math.sin(yaw) * d[0] + math.cos(yaw) * d[1]]
         assert rel == pytest.approx(b.spot_rel(foot), abs=1e-9)
 
+
+# -- playing ----------------------------------------------------------------------
 
 def test_lines_up_and_kicks_without_assist():
     brain = play(IdealWorld(), 25)
@@ -113,42 +158,89 @@ def test_lines_up_and_kicks_without_assist():
     assert all(k["err_m"] <= KickParams().tolerance for k in kicks)
 
 
-def test_scores_goals_both_ways():
-    brain = play(IdealWorld(), 120)
-    goals = brain.events["goals"]
-    assert len(goals) >= 3, brain.events
-    assert {g["goal"] for g in goals} == {1, -1}        # attacked both ends
+def test_keeps_kicking_and_the_ball_goes_where_aimed():
+    brain = play(IdealWorld(), 120, feet=("left", "right"))
+    done = finished(brain)
+    assert len(done) >= 5, brain.events
+    assert all(abs(k["aim_err_deg"]) < 10 for k in done)       # perfect legs, no kick noise
+    assert len({round(k["aim_deg"]) for k in done}) == len(done)  # a new direction every time
+
+
+def test_soft_arena_keeps_the_ball_nearby():
+    w = IdealWorld(kick_noise=0.15)
+    brain = play(w, 400, feet=("left", "right"), seed=3)
+    assert len(brain.events["kicks"]) >= 15
+    assert any(k["aim_mode"] == "home" for k in brain.events["kicks"]), "never strayed: test is too short"
+    # An ideal kick rolls ~1.25 m, so the ball can end up at most about that far outside.
+    assert w.max_ball_r < KickParams().arena_radius + 1.5
 
 
 def test_walks_round_the_ball_when_on_the_wrong_side():
-    # Duck starts between the ball and the goal it's attacking.
-    w = IdealWorld(duck_xy=(0.5, 0.0), yaw=math.pi, ball_xy=(0.0, 0.0))
-    brain = play(w, 30)
+    # Ball outside the arena, so the aim is back home (-x); the duck starts on the
+    # home side of the ball, i.e. right where the ball is about to be kicked.
+    w = IdealWorld(duck_xy=(1.6, 0.0), yaw=0.0, ball_xy=(2.0, 0.0))
+    brain = play(w, 40)
     assert brain.events["kicks"], "never kicked"
-    assert w.min_ball_gap > 0.15        # never walked through the ball
+    assert brain.events["kicks"][0]["aim_mode"] == "home"
+    assert w.min_ball_gap > 0.12        # never walked through the ball
 
 
-def test_uses_both_feet_when_available():
-    brain = play(IdealWorld(), 120, feet=("left", "right"))
-    assert {k["foot"] for k in brain.events["kicks"]} == {"left", "right"}
+@pytest.mark.parametrize("foot", ["left", "right"])
+def test_picks_the_foot_whose_stance_is_nearer(foot):
+    b = KickBrain(KickParams(), ["left", "right"])
+    ball = np.zeros(2)
+    b.pick_aim(snap_at((-0.5, 0.0), ball))
+    stance, a = b.stance_for(ball, foot)
+    b._approach(Snapshot(0.0, stance - 0.3 * a, float(math.atan2(a[1], a[0])), ball, 0.0, False, False))
+    assert b.foot == foot
 
 
-def play_sloppy(params, seconds=30):
-    """A sloppy duck: the first time it starts lining up it ends up 2.5 cm off
-    to the side, and it walks in dead straight (no steering, no sidestep), so
-    that attempt can never line up exactly."""
+def test_aims_again_when_the_ball_is_knocked():
+    w = IdealWorld()
+    brain = KickBrain(KickParams(), ["right"])
+    for _ in range(int(2 / DT)):
+        w.apply(brain.update(w.snap()), brain)
+    first = brain.aim.copy()
+    w.ball += np.array([0.0, 0.3])           # someone shoves the ball
+    for _ in range(3):
+        w.apply(brain.update(w.snap()), brain)
+    assert brain.aim_from == pytest.approx(w.ball, abs=1e-6)
+    assert not np.allclose(brain.aim, first)
+
+
+def test_long_walk_to_the_ball_is_not_a_timeout():
+    # Lazy legs (~0.1 m/s) from 4 m away: ~40 s of walking, then it must still kick.
+    w = IdealWorld(duck_xy=(-4.0, 0.0), ball_xy=(0.0, 0.0), lazy=True)
+    brain = play(w, 90, feet=("left", "right"))
+    assert not brain.events["timeouts"]
+    assert brain.events["kicks"]
+
+
+@pytest.mark.parametrize("start", [(-0.45, 0.0, 0.0), (-0.3, 0.3, -1.0), (0.5, 0.0, math.pi), (0.2, -0.4, 2.0)])
+def test_keeps_kicking_with_lazy_legs(start):
+    # Legs like the real walking policy: dead zone, no sidestep, no reverse.
+    x, y, yaw = start
+    brain = play(IdealWorld(duck_xy=(x, y), yaw=yaw, lazy=True), 150, feet=("left", "right"))
+    kicks = brain.events["kicks"]
+    assert len(kicks) >= 3, f"only {len(kicks)} kicks: {brain.events}"
+    assert all(k["err_m"] <= KickParams().tolerance for k in kicks)
+    assert all(abs(k["aim_err_deg"]) < 15 for k in finished(brain))
+
+
+# -- assist -----------------------------------------------------------------------
+
+def play_sloppy(params, seconds=40):
+    """A sloppy duck: the first time it lines up, the ball ends up 2.5 cm off
+    to the side while it settles (as if it stopped badly), so that attempt can
+    never kick from the spot."""
     w = IdealWorld()
     brain = KickBrain(params, ["right"])
     shoved = False
     for _ in range(int(seconds / DT)):
         act = brain.update(w.snap())
-        if brain.state == "ALIGN":
-            if not shoved:
-                w.duck += 0.025 * np.array([-math.sin(w.yaw), math.cos(w.yaw)])
-                shoved = True
-            act.cmd[1] = 0.0
-            if act.cmd[0]:
-                act.cmd[2] = 0.0
+        if brain.state == "SETTLE" and not shoved:
+            w.ball += 0.025 * np.array([-math.sin(w.yaw), math.cos(w.yaw)])
+            shoved = True
         w.apply(act, brain)
     return brain
 
@@ -164,14 +256,3 @@ def test_never_kicks_unaligned_without_assist():
     brain = play_sloppy(KickParams())
     assert brain.events["retries"], "should have given up on the sloppy attempt"
     assert all(k["err_m"] <= KickParams().tolerance and not k["assisted"] for k in brain.events["kicks"])
-
-
-@pytest.mark.parametrize("start", [(-0.45, 0.0, 0.0), (-0.3, 0.3, -1.0), (0.5, 0.0, math.pi), (0.2, -0.4, 2.0)])
-def test_scores_with_lazy_legs(start):
-    # Legs like the real walking policy: dead zone, no sidestep, no reverse.
-    x, y, yaw = start
-    brain = play(IdealWorld(duck_xy=(x, y), yaw=yaw, lazy=True), 120, feet=("left", "right"))
-    kicks = brain.events["kicks"]
-    assert kicks, f"never kicked: {brain.events}"
-    assert all(k["err_m"] <= KickParams().tolerance for k in kicks)
-    assert brain.events["goals"], brain.events
