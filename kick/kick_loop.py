@@ -203,7 +203,8 @@ def main():
                                               exact=f"ball_kick_{foot}.onnx", how_to_train=train_hint)
 
     model, data, bam_ctrl, policy = sim.build_sim(ip, rl_repo, walk, use_bam=not args.no_bam,
-                                                  kick_left=paths.get("left"), kick_right=paths.get("right"))
+                                                  kick_left=paths.get("left"), kick_right=paths.get("right"),
+                                                  ball_roll=args.ball_roll)
     duck = sim.Duck(model, data, bam_ctrl, policy, np.random.default_rng(args.seed))
     params = KickParams(assist=args.assist, tolerance=args.tolerance,
                         aim_spread=math.radians(args.aim_spread), arena_radius=args.arena)

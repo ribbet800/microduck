@@ -112,8 +112,29 @@ def walking_policy(path: str | None, revision: str | None) -> str:
                       "then `uv run scripts/export.py ...`."))
 
 
+# Pollen's ball sets a rolling friction but keeps MuJoCo's default condim=3,
+# which ignores it: a kicked ball rolls at constant speed forever. Measured in
+# MuJoCo 3.10, ball launched rolling at 0.6 m/s (a typical kick) on the floor:
+# (rolling friction coefficient, metres rolled).
+_ROLL_TABLE = ((0.0008, 4.97), (0.0012, 2.48), (0.0015, 1.69), (0.002, 1.02), (0.0025, 0.69),
+               (0.003, 0.52), (0.004, 0.35), (0.006, 0.22), (0.01, 0.13))
+
+
+def set_ball_roll(model, metres: float):
+    """Give the ball rolling resistance so a typical kick rolls about `metres`
+    (0.13-5 m). 0 leaves Pollen's ball as it is."""
+    if not metres:
+        return
+    import mujoco
+    mu, dist = np.log(np.array(_ROLL_TABLE)).T
+    g = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ball_geom")
+    model.geom_condim[g] = 6                       # turns on torsional + rolling friction
+    model.geom_friction[g, 2] = float(np.exp(np.interp(np.log(metres), dist[::-1], mu[::-1])))
+
+
 def build_sim(ip, rl_repo: Path, walking_path: str, use_bam: bool = True,
-              kick_left: str | None = None, kick_right: str | None = None, kick_duration: float = 3.0):
+              kick_left: str | None = None, kick_right: str | None = None, kick_duration: float = 3.0,
+              ball_roll: float = 1.0):
     """Load the duck + ball scene and Pollen's PolicyInference runner."""
     import mujoco
     import onnxruntime as ort
@@ -127,6 +148,7 @@ def build_sim(ip, rl_repo: Path, walking_path: str, use_bam: bool = True,
         model = mujoco.MjModel.from_xml_path(xml)
         model.opt.timestep = 0.005
         data = mujoco.MjData(model)
+    set_ball_roll(model, ball_roll)
 
     obs_dim = ort.InferenceSession(walking_path).get_inputs()[0].shape[-1]
     if (kick_left or kick_right) and obs_dim != 61:
@@ -359,6 +381,8 @@ def add_common_args(ap):
     ap.add_argument("--policy-revision", type=str, default=None, help="Hub revision/tag, e.g. v8")
     ap.add_argument("--rl-repo", type=str, default=None, help="path to a microduck_rl checkout")
     ap.add_argument("--no-bam", action="store_true", help="simple PD servos instead of the BAM model")
+    ap.add_argument("--ball-roll", type=float, default=1.0,
+                    help="how far a typical kick rolls (m, 0.13-5); 0 = Pollen's ball, which never slows down")
     ap.add_argument("--seed", type=int, default=0)
 
 
