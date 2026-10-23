@@ -79,11 +79,10 @@ trained maximum command, so the levers are in ALIGN:
   walk round (~10 s). Ideas: stop a few mm earlier (`stop_lead`) and creep in with one more
   short walk; or allow a slightly bigger tolerance and check `alignment.png` / `aiming.png`
   for whether 15–20 mm kicks still go straight.
-- **Turn-in-place is slow and bursty** (velstand's onset at ~0.7 rad/s is bimodal). Arriving
-  at the pre-stance already facing along the aim would save most turning: approach the
-  pre-stance from behind (a waypoint further back on the aim line).
-- **Is ±60° the right spread?** Bigger spreads mean more turning and walking round.
-  Try `--aim-spread 30` vs `90` and compare kicks per minute.
+- **Turn-in-place** is ~10% of all time (inside ALIGN). Tried and rejected: steering at a
+  "carrot" on the aim line during APPROACH so the duck arrives facing along it: 14.0 vs 15.7
+  kicks / 5 min (the longer path costs more than the turning saved).
+- **Aim spread** (3 seeds x 300 s): ±30° 13.3, **±60° 15.7**, ±90° 12.7 kicks. ±60° stays.
 - **Chaser:** ~10 s per ball, limited by the legs. Check `timeseries.png` for turn lag.
 
 `runs/` sweeps: `--seed` makes runs repeatable; compare several seeds, single runs are noisy
