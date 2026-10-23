@@ -16,7 +16,8 @@ are quick to try and good to watch.
 | Thing | Status |
 |---|---|
 | `fetch/chase_ball.py`: Fetch Stage 0, hand-coded ball chaser | Works with the real velstand policy: 9 balls / 90 s, 0 falls |
-| `kick/kick_loop.py`: endless kicking, random aims in a soft arena | Works with the real policies: ~15 kicks / 5 min (3 seeds), 0 falls, ~10° mean direction error, ball rolls ~0.8 m per kick |
+| `kick/kick_loop.py`: endless kicking, random aims in a soft arena | Works with the real policies: ~15 kicks / 5 min (6 seeds), 0 falls, ~10° mean direction error, ball rolls ~0.8 m per kick. Orbits round the ball on reversals |
+| `kick/kickback.py`: back and forth along a 1 m line | Works with the real policies: 12 kicks / 5 min, strictly alternating, an orbit before every kick, ball ends ~0.18 m off the line on average |
 | `common/`: shared game loop, brain interface, steering, sim setup | Built; matches Pollen's `infer_policy.py` main loop. `docs/how_it_works.md` has diagrams |
 | Runs on Jack's Windows laptop | Headless and live viewer both checked (2026-10-23) |
 
@@ -97,6 +98,13 @@ trained maximum command, so the levers are in ALIGN:
   bursts). Differences under ~1.5 kicks are noise at 6 seeds: each code change shifts the
   random aim sequence, so runs aren't paired. Bigger wins probably need better legs (a faster
   walking policy) or a different game (shorter rolls: `--ball-roll 0.5`).
+- **Orbit** (replaced the single go-round waypoint): ~5 orbits per 5 min, all 126–169°
+  reversals; kicks 15.5 vs 15.8 (noise). No real knock happens while walking or orbiting:
+  13 of 16 are the turn on the spot right after a retry, when the duck stands at the kick
+  stance 9 cm from the ball. Geometry (foot box vs ball): turning away from the ball side
+  clips it within ~30°, towards it the other foot clips it at ~60–90°, walking forward
+  kicks it. With no sidestep or backward walk there is no clean way out; the fix would be
+  fewer retries.
 - **Chaser:** ~10 s per ball, limited by the legs. Check `timeseries.png` for turn lag.
 
 `runs/` sweeps: `--seed` makes runs repeatable; compare several seeds, single runs are noisy
@@ -271,3 +279,9 @@ Add dated entries: what was tried, numbers, what was learned.
   moved into `common/`, diagrams in `docs/`. Run-in sweep (3 seeds x 300 s): 0.15 / 0.20 /
   0.25 m -> 14.0 / **15.7** / 13.0 kicks. Now: ~15 kicks / 5 min, 0 falls, ~10° direction
   error, ~0.8 m per kick. Live viewer checked for both games.
+- **2026-10-24:** Orbit approach (circle the ball 10 cm outside the pre-stance point when the
+  straight way is blocked; leave it within 30° of the aim line, so the duck arrives facing
+  along the aim). First version aimed at an "entry" waypoint 12 cm behind the pre-stance
+  point: the duck circled it, since its tightest walking turn is wider than that; dropped.
+  Kickback added (back the way the last kick went; "far end" kept kicking the same way when
+  the ball stopped mid-line). Brains publish `plan` (their intended route) for the viewer.
