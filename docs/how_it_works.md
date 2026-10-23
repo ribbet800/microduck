@@ -65,7 +65,7 @@ stateDiagram-v2
 | Transition | Exact condition (`KickParams` defaults) |
 |---|---|
 | APPROACH → ALIGN | trunk within 3 cm of the point 25 cm behind the kick stance (not while walking round the ball) |
-| ALIGN → SETTLE | ball within 12 mm (0.8 × 15 mm tolerance) of the kick spot, facing the aim within 8° |
+| ALIGN → SETTLE | ball within 12 mm (0.8 × 15 mm tolerance) of the kick spot and facing the aim within 8°, held for 0.3 s while standing |
 | ALIGN → APPROACH | walked 15 mm past the stance ("overshot"); right depth and heading but ball still off the spot ("can't shuffle"); 15 s in ALIGN; or more than 37 cm from the stance ("ball got away") |
 | SETTLE → KICK | after 1 s standing: ball within 15 mm, heading within 12° |
 | SETTLE → ALIGN | after 1 s: ball drifted off (more than 15 mm or 12°) |

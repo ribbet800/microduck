@@ -77,6 +77,7 @@ class KickParams:
     align_max_cut: float = math.radians(30)  # ...up to this angle (like a car's lane keeping)
     align_max_turn: float = 0.9
     align_timeout_s: float = 15.0
+    lined_up_s: float = 0.3              # must stay lined up this long, standing, to count
     got_away: float = 0.12               # further than standoff + this from the stance: approach again
     # Kick and after
     settle_s: float = 1.0
@@ -104,6 +105,7 @@ class KickBrain(Brain):
         self.events = {"kicks": [], "retries": [], "timeouts": []}
         self._kick_started = False
         self._kick_peak = 0.0
+        self._lined_up_t0 = None
         self._steer = SteerParams(max_forward=params.max_forward, min_forward=params.min_forward,
                                   max_turn=params.max_turn, catch_radius=params.approach_radius,
                                   slow_radius=params.approach_slow)
@@ -282,9 +284,16 @@ class KickBrain(Brain):
             return act
         # Lined up with some margin (0.8 x tolerance): standing still in SETTLE
         # lets the ball drift by a few mm, and it still has to be in tolerance then.
+        # It has to stay lined up for `lined_up_s` with a zero command: the first
+        # step of a walk-in lunges the trunk forward for a moment, which can look
+        # lined up and then sway back (seen in MuJoCo: 10 mm -> 17 mm).
         if err < 0.8 * p.tolerance and abs(h) < p.heading_tol:
-            self.set_state("SETTLE", s.t, f"lined up ({err * 1000:.0f} mm off)")
+            if self._lined_up_t0 is None or self._lined_up_t0 < self.state_t0:   # (from an earlier ALIGN)
+                self._lined_up_t0 = s.t
+            if s.t - self._lined_up_t0 >= p.lined_up_s:
+                self.set_state("SETTLE", s.t, f"lined up ({err * 1000:.0f} mm off)")
             return act
+        self._lined_up_t0 = None
         if self._assist_ok(err, h) and float(np.dot(stance - s.duck_xy, a)) < p.stop_lead:
             self.set_state("SETTLE", s.t, f"close enough for an assist ({err * 1000:.0f} mm off)")
             return act
