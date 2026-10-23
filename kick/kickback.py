@@ -32,12 +32,12 @@ from kick_loop import KickLoop, add_kick_args, make_kick_duck  # noqa: E402
 class Kickback(KickLoop):
     """KickLoop with a line instead of the arena, and a "how straight" score."""
 
+    legend = KickLoop.legend[:-1] + [("faint line", "the line it kicks the ball along")]
+
     def __init__(self, duck, brain: KickbackBrain, follow: bool):
         super().__init__(duck, brain, follow)
         if not follow:
             self.camera = {**self.camera, "distance": 3.0}
-
-    legend = KickLoop.legend[:-1] + [("faint line", "the line it kicks the ball along")]
 
     def draw_area(self, scn):
         a, b = self.brain.ends
