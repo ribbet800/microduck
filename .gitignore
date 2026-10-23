@@ -39,3 +39,6 @@ checkpoints/
 *.onnx
 videos/
 *.mp4
+
+# Pollen's microduck_rl checkout
+third_party/

@@ -1,0 +1,33 @@
+[project]
+name = "microduck-play"
+version = "0.1.0"
+description = "Fun experiments for the Microduck robot: ball chasing, fetch, and friends"
+readme = "README.md"
+license = "MIT"
+# BAM (Pollen's servo model) only supports Python 3.12.
+requires-python = ">=3.12, <3.13"
+dependencies = [
+    "mujoco==3.10.0",  # what microduck_rl trains with
+    "onnxruntime>=1.20",
+    "numpy",
+    "matplotlib",
+    "huggingface_hub>=0.27",
+    "imageio[ffmpeg]",
+    # Pollen's servo model for the XL330 — the actuator their policies are trained on.
+    "better-actuator-models",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv]
+package = false
+override-dependencies = [
+    # Same overrides as microduck_rl: BAM pins old protobuf and a broken zmq stub
+    # that we don't need (we only use its actuator model).
+    "protobuf>=4.0,<7.0",
+    "zmq ; python_version < '3.0'",
+]
+
+[tool.uv.sources]
+better-actuator-models = { git = "https://github.com/Rhoban/bam.git", rev = "62bd8ce12154340be97e06f7f41a0ca8f116d967" }  # same commit microduck_rl pins
