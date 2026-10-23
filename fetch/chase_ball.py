@@ -392,6 +392,12 @@ def main():
 
     rl_repo = find_rl_repo(args.rl_repo)
     sys.path.insert(0, str(rl_repo / "scripts"))
+    if sys.platform == "win32":
+        # Pollen's script imports termios/tty (Mac/Linux only) for its keyboard
+        # reader, which the chase never uses. Empty stand-ins let it import on Windows.
+        import types
+        for name in ("termios", "tty"):
+            sys.modules.setdefault(name, types.ModuleType(name))
     import infer_policy as ip   # Pollen's runner: BAM servos, 61-D obs, PolicyInference
 
     policy_path = get_policy(args.policy, args.policy_revision)
