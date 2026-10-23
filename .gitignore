@@ -42,3 +42,6 @@ videos/
 
 # Pollen's microduck_rl checkout
 third_party/
+
+# Claude Code agent worktrees
+.claude/worktrees/

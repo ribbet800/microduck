@@ -20,6 +20,10 @@ dependencies = [
 [dependency-groups]
 dev = ["pytest"]
 
+[tool.pytest.ini_options]
+# Only our tests: third_party/microduck_rl has its own, which need its GPU stack.
+testpaths = ["tests"]
+
 [tool.uv]
 package = false
 override-dependencies = [

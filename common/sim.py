@@ -5,9 +5,10 @@ loads the duck with the BAM servo model and runs ONNX policies with the same
 61-D observation used in training. This module wraps it so a game only has to
 say what command to send each step.
 
-A "game" is any object with:
-    t                      sim time (s), advanced by the game itself
-    tick()                 one 50 Hz control step (call duck.step / duck.start_kick)
+The runners here drive a game (common/game.py: `Game`), which has:
+    t                      sim time (s)
+    start()                put the duck and ball where they begin
+    tick()                 one 50 Hz control step
     draw(scn)              append debug markers to a MuJoCo scene
     status()               list of (label, value) strings for the on-screen panel
     camera                 dict: {"track": True, "distance", "elevation", "azimuth"}
@@ -74,6 +75,8 @@ def import_infer_policy(rl_repo: Path):
         # we never use. Empty stand-ins let it import on Windows.
         for name in ("termios", "tty"):
             sys.modules.setdefault(name, types.ModuleType(name))
+        # It also prints arrows (→), which crash a cp1252 stdout (output piped to a file).
+        sys.stdout.reconfigure(errors="replace")
     import infer_policy
     return infer_policy
 
@@ -112,8 +115,29 @@ def walking_policy(path: str | None, revision: str | None) -> str:
                       "then `uv run scripts/export.py ...`."))
 
 
+# Pollen's ball sets a rolling friction but keeps MuJoCo's default condim=3,
+# which ignores it: a kicked ball rolls at constant speed forever. Measured in
+# MuJoCo 3.10, ball launched rolling at 0.6 m/s (a typical kick) on the floor:
+# (rolling friction coefficient, metres rolled).
+_ROLL_TABLE = ((0.0008, 4.97), (0.0012, 2.48), (0.0015, 1.69), (0.002, 1.02), (0.0025, 0.69),
+               (0.003, 0.52), (0.004, 0.35), (0.006, 0.22), (0.01, 0.13))
+
+
+def set_ball_roll(model, metres: float):
+    """Give the ball rolling resistance so a typical kick rolls about `metres`
+    (0.13-5 m). 0 leaves Pollen's ball as it is."""
+    if not metres:
+        return
+    import mujoco
+    mu, dist = np.log(np.array(_ROLL_TABLE)).T
+    g = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ball_geom")
+    model.geom_condim[g] = 6                       # turns on torsional + rolling friction
+    model.geom_friction[g, 2] = float(np.exp(np.interp(np.log(metres), dist[::-1], mu[::-1])))
+
+
 def build_sim(ip, rl_repo: Path, walking_path: str, use_bam: bool = True,
-              kick_left: str | None = None, kick_right: str | None = None, kick_duration: float = 3.0):
+              kick_left: str | None = None, kick_right: str | None = None, kick_duration: float = 3.0,
+              ball_roll: float = 1.0):
     """Load the duck + ball scene and Pollen's PolicyInference runner."""
     import mujoco
     import onnxruntime as ort
@@ -127,6 +151,7 @@ def build_sim(ip, rl_repo: Path, walking_path: str, use_bam: bool = True,
         model = mujoco.MjModel.from_xml_path(xml)
         model.opt.timestep = 0.005
         data = mujoco.MjData(model)
+    set_ball_roll(model, ball_roll)
 
     obs_dim = ort.InferenceSession(walking_path).get_inputs()[0].shape[-1]
     if (kick_left or kick_right) and obs_dim != 61:
@@ -151,10 +176,10 @@ def yaw_from_quat(q) -> float:
 class Duck:
     """Thin wrapper round the sim: reset, read state, step, move the ball, kick."""
 
-    def __init__(self, model, data, bam_ctrl, policy, rng):
+    def __init__(self, model, data, bam_ctrl, policy):
         import mujoco
         self.mj = mujoco
-        self.model, self.data, self.bam_ctrl, self.policy, self.rng = model, data, bam_ctrl, policy, rng
+        self.model, self.data, self.bam_ctrl, self.policy = model, data, bam_ctrl, policy
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")
         self.qadr = int(model.jnt_qposadr[jid])
         self.vadr = int(model.jnt_dofadr[jid])
@@ -181,13 +206,6 @@ class Duck:
     def place_ball(self, x, y):
         self.data.qpos[self.ball_q:self.ball_q + 7] = [x, y, 0.035, 1, 0, 0, 0]
         self.data.qvel[self.ball_v:self.ball_v + 6] = 0.0
-
-    def place_ball_near_duck(self, min_r=0.6, max_r=1.4):
-        x, y = self.xy
-        r = self.rng.uniform(min_r, max_r)
-        a = self.rng.uniform(-math.pi, math.pi)
-        self.place_ball(x + r * math.cos(a), y + r * math.sin(a))
-        return float(x + r * math.cos(a)), float(y + r * math.sin(a))
 
     # -- state ------------------------------------------------------------------
     @property
@@ -279,7 +297,6 @@ def run_live(duck: Duck, game):
 
     with mujoco.viewer.launch_passive(duck.model, duck.data, show_left_ui=False, show_right_ui=False) as viewer:
         _apply_camera(viewer.cam, game.camera, duck.trunk_id)
-        last_print = -10.0
         while viewer.is_running():
             t0 = time.time()
             with viewer.lock():
@@ -287,12 +304,8 @@ def run_live(duck: Duck, game):
                 viewer.user_scn.ngeom = 0
                 game.draw(viewer.user_scn)
             rows = game.status()
-            if hasattr(viewer, "set_texts"):
-                viewer.set_texts((None, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                                  "\n".join(r[0] for r in rows), "\n".join(r[1] for r in rows)))
-            elif game.t - last_print > 2.0:
-                print("   ".join(f"{a}: {b}" for a, b in rows))
-                last_print = game.t
+            viewer.set_texts((None, mujoco.mjtGridPos.mjGRID_TOPLEFT,
+                              "\n".join(r[0] for r in rows), "\n".join(r[1] for r in rows)))
             viewer.sync()
             time.sleep(max(0.0, CONTROL_DT - (time.time() - t0)))
 
@@ -344,7 +357,7 @@ def save_outputs(game, out_dir: Path, frames=(), fps=25):
         imageio.mimwrite(out_dir / "video.mp4", frames, fps=fps, quality=7, macro_block_size=8)
 
     print(f"\nSaved to {out_dir}/")
-    for name in ["summary.json", *pngs, "log.csv"] + (["video.mp4"] if frames else []):
+    for name in ["summary.json", *pngs, "log.csv", "events.json"] + (["video.mp4"] if frames else []):
         print(f"  {name}")
     print(json.dumps({k: v for k, v in summary.items() if k != "params"}, indent=2, default=_jsonable))
 
@@ -359,8 +372,30 @@ def add_common_args(ap):
     ap.add_argument("--policy-revision", type=str, default=None, help="Hub revision/tag, e.g. v8")
     ap.add_argument("--rl-repo", type=str, default=None, help="path to a microduck_rl checkout")
     ap.add_argument("--no-bam", action="store_true", help="simple PD servos instead of the BAM model")
+    ap.add_argument("--ball-roll", type=float, default=1.0,
+                    help="how far a typical kick rolls (m, 0.13-5); 0 = Pollen's ball, which never slows down")
     ap.add_argument("--seed", type=int, default=0)
 
 
 def default_out(game_name: str, cli_out: str | None) -> Path:
     return Path(cli_out) if cli_out else REPO / "runs" / time.strftime(f"{game_name}_%Y%m%d-%H%M%S")
+
+
+def make_duck(args, kick_left: str | None = None, kick_right: str | None = None) -> Duck:
+    """Everything up to a duck standing in the ball scene, from the common CLI args."""
+    rl_repo = find_rl_repo(args.rl_repo)
+    ip = import_infer_policy(rl_repo)
+    walk = walking_policy(args.policy, args.policy_revision)
+    model, data, bam_ctrl, policy = build_sim(ip, rl_repo, walk, use_bam=not args.no_bam,
+                                              kick_left=kick_left, kick_right=kick_right, ball_roll=args.ball_roll)
+    return Duck(model, data, bam_ctrl, policy)
+
+
+def run(duck: Duck, game, args, game_name: str):
+    """Start the game, then watch it live or run it headless and save the outputs."""
+    game.start()
+    print(f"\nRunning {game_name}: " + ("headless" if args.headless else "close the viewer window to stop."))
+    if args.headless:
+        run_headless(duck, game, args.duration, default_out(game_name, args.out), args.video)
+    else:
+        run_live(duck, game)
