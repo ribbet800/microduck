@@ -59,8 +59,9 @@ class KickParams:
                                          # i.e. inside the kick's training noise
     heading_tol: float = math.radians(8)  # ...and the duck faces along the aim this well
     # Approach
-    standoff: float = 0.25               # pre-stance point this far behind the kick stance:
-                                         # the run-in that steers out sideways error
+    standoff: float = 0.2                # pre-stance point this far behind the kick stance:
+                                         # the run-in that steers out sideways error (0.2 beat
+                                         # 0.15 and 0.25 in MuJoCo: most kicks/min, fewest retries)
     approach_radius: float = 0.03
     approach_slow: float = 0.3           # slow down this far from the pre-stance point (m)
     go_round: float = 0.25               # how wide to circle round the ball
@@ -282,23 +283,6 @@ class KickBrain(Brain):
         if np.linalg.norm(stance - s.duck_xy) > p.standoff + p.got_away:
             self.set_state("APPROACH", s.t, "ball got away")
             return act
-        # Lined up with some margin (0.8 x tolerance): standing still in SETTLE
-        # lets the ball drift by a few mm, and it still has to be in tolerance then.
-        # It has to stay lined up for `lined_up_s` with a zero command: the first
-        # step of a walk-in lunges the trunk forward for a moment, which can look
-        # lined up and then sway back (seen in MuJoCo: 10 mm -> 17 mm).
-        if err < 0.8 * p.tolerance and abs(h) < p.heading_tol:
-            if self._lined_up_t0 is None or self._lined_up_t0 < self.state_t0:   # (from an earlier ALIGN)
-                self._lined_up_t0 = s.t
-            if s.t - self._lined_up_t0 >= p.lined_up_s:
-                self.set_state("SETTLE", s.t, f"lined up ({err * 1000:.0f} mm off)")
-            return act
-        self._lined_up_t0 = None
-        if self._assist_ok(err, h) and float(np.dot(stance - s.duck_xy, a)) < p.stop_lead:
-            self.set_state("SETTLE", s.t, f"close enough for an assist ({err * 1000:.0f} mm off)")
-            return act
-        if dt_state > p.align_timeout_s:
-            return self._retry(s, err, "couldn't line up, trying again")
         # Where the trunk is relative to the kick stance, in the world along the
         # aim line: `ahead` > 0 means it still has to walk forward, `lat` > 0
         # that it needs to move left. (Judged in the world, not from the ball in
@@ -306,6 +290,26 @@ class KickBrain(Brain):
         # and a last turn on the spot swings the kick spot 9 cm ahead sideways.)
         to_stance = stance - s.duck_xy
         ahead, lat = float(np.dot(to_stance, a)), float(np.dot(to_stance, left_of(a)))
+        # Lined up: with some margin (0.8 x tolerance) while still walking in,
+        # since standing still in SETTLE lets the ball drift by a few mm; once
+        # it has walked in as far as it will go, anything inside tolerance will
+        # do (the alternative is a ~10 s retry). Either way it has to stay lined
+        # up for `lined_up_s` with a zero command: the first step of a walk-in
+        # lunges the trunk forward for a moment, which can look lined up and then
+        # sway back (seen in MuJoCo: 10 mm -> 17 mm).
+        walked_in = ahead <= p.stop_lead
+        if abs(h) < p.heading_tol and (err < 0.8 * p.tolerance or (walked_in and err < p.tolerance)):
+            if self._lined_up_t0 is None or self._lined_up_t0 < self.state_t0:   # (from an earlier ALIGN)
+                self._lined_up_t0 = s.t
+            if s.t - self._lined_up_t0 >= p.lined_up_s:
+                self.set_state("SETTLE", s.t, f"lined up ({err * 1000:.0f} mm off)")
+            return act
+        self._lined_up_t0 = None
+        if self._assist_ok(err, h) and walked_in:
+            self.set_state("SETTLE", s.t, f"close enough for an assist ({err * 1000:.0f} mm off)")
+            return act
+        if dt_state > p.align_timeout_s:
+            return self._retry(s, err, "couldn't line up, trying again")
         # Steer like a car onto the line: aim off the kick direction, towards
         # the side the duck needs to move to, by an angle that shrinks as the
         # sideways error does. `hd` is the heading error from that.

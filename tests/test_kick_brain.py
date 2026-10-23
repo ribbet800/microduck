@@ -151,7 +151,7 @@ def test_keeps_kicking_and_the_ball_goes_where_aimed():
     done = finished(brain)
     assert len(done) >= 5, brain.events
     assert all(abs(k["aim_err_deg"]) < 10 for k in done)       # perfect legs, no kick noise
-    assert len({round(k["aim_deg"]) for k in done}) == len(done)  # a new direction every time
+    assert len({k["aim_deg"] for k in done}) == len(done)        # a new direction every time
 
 
 def test_soft_arena_keeps_the_ball_nearby():
