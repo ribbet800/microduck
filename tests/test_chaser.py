@@ -12,32 +12,47 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fetch"))
+REPO = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(REPO / "fetch"), str(REPO / "tests")]
 from chaser import ChaserParams, ball_in_duck_frame, chase_command, yaw_from_quat  # noqa: E402
+from test_kick_brain import lazy_legs  # noqa: E402
 
 
-def simulate(ball, yaw0=0.0, seconds=30.0, dt=0.02, p=ChaserParams()):
-    pos, yaw = np.zeros(2), yaw0
+def simulate(ball, yaw0=0.0, seconds=30.0, dt=0.02, p=ChaserParams(), lazy=False):
+    pos, yaw, walking = np.zeros(2), yaw0, False
     for step in range(int(seconds / dt)):
         cmd, dist, _ = chase_command(ball_in_duck_frame(pos, yaw, ball), p)
         if dist < p.catch_radius:
             return step * dt
         assert abs(cmd[0]) <= p.max_forward + 1e-6 and abs(cmd[2]) <= p.max_turn + 1e-6
-        yaw += cmd[2] * dt
-        pos += cmd[0] * dt * np.array([math.cos(yaw), math.sin(yaw)])
+        vx, wz = cmd[0], cmd[2]
+        if lazy:
+            vx, _, wz, walking = lazy_legs(cmd, walking)
+        yaw += wz * dt
+        pos += vx * dt * np.array([math.cos(yaw), math.sin(yaw)])
     return None
 
 
+@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("angle_deg", range(-180, 180, 30))
-def test_catches_ball_in_any_direction(angle_deg):
+def test_catches_ball_in_any_direction(angle_deg, lazy):
     a = math.radians(angle_deg)
-    t = simulate(np.array([math.cos(a), math.sin(a)]))
-    assert t is not None and t < 15.0
+    t = simulate(np.array([math.cos(a), math.sin(a)]), lazy=lazy)
+    assert t is not None and t < (25.0 if lazy else 15.0)
 
 
 def test_ball_straight_ahead_is_quick():
-    # 1 m at 0.25 m/s with slow-down near the ball: well under 8 s.
+    # 1 m at 0.3-0.4 m/s with slow-down near the ball: well under 8 s.
     assert simulate(np.array([1.0, 0.0])) < 8.0
+
+
+def test_never_commands_inside_the_dead_zone():
+    # Any forward command must be big enough for the real walking policy to act on.
+    p = ChaserParams()
+    for x in np.linspace(-1.5, 1.5, 31):
+        for y in np.linspace(-1.5, 1.5, 31):
+            cmd, _, _ = chase_command(np.array([x, y]), p)
+            assert cmd[0] == 0.0 or cmd[0] >= p.min_forward
 
 
 def test_turns_towards_ball_first():

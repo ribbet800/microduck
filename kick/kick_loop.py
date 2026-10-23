@@ -2,8 +2,8 @@
 """Kick loop: the duck plays football against itself.
 
 Pollen's walking policy is the legs and Pollen's kick policy is the boot. The
-brain (kick/brain.py) walks round behind the ball, shuffles until the ball is
-exactly in front of a foot, stands still, swaps in the kick policy, watches
+brain (kick/brain.py) walks round behind the ball, walks in along the line to
+the goal until the ball is exactly in front of a foot, stands still, swaps in the kick policy, watches
 where the ball goes, and does it all again. Score by rolling the ball into the
 goal it's attacking; then it attacks the other end.
 

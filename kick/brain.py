@@ -7,8 +7,10 @@ straight ahead. So all the skill here is in lining up:
 
     APPROACH  walk to a point behind the ball, on the line from the ball to the
               goal (going round the ball if the duck is on the wrong side)
-    ALIGN     shuffle slowly (forwards/sideways/turn) until the ball sits on the
-              kick spot and the duck faces the goal
+    ALIGN     turn in place to face the goal, then walk in along the ball-goal
+              line, steering out any sideways error, and stop with the ball on
+              the kick spot. (Pollen's walking policy can't shuffle: it ignores
+              small, sideways and backward commands. Overshoot = start again.)
     SETTLE    stand still for a second (the kick was trained from a still stand)
     KICK      swap to the kick policy for ~3 s, then back to walking
     WATCH     wait for the ball to stop (or go in / out), then go again
@@ -45,16 +47,21 @@ class KickParams:
     tolerance: float = 0.012             # kick only if the ball is this close to the spot (m)
     heading_tol: float = math.radians(8)  # ...and the duck faces the goal this well
     # Approach
-    standoff: float = 0.15               # pre-stance point this far behind the kick stance
-    approach_radius: float = 0.06
+    standoff: float = 0.25               # pre-stance point this far behind the kick stance:
+                                         # the run-in that steers out sideways error
+    approach_radius: float = 0.05
     go_round: float = 0.25               # how wide to circle round the ball
-    max_forward: float = 0.25
+    max_forward: float = 0.4
+    min_forward: float = 0.3             # velstand ignores less from a stand (see fetch/chaser.py)
     max_turn: float = 0.9
-    # Fine alignment
-    align_gain: float = 1.5              # m/s of command per m of error
-    align_max_v: float = 0.06
-    align_min_v: float = 0.025           # tiny commands may not move the duck at all
-    align_turn_gain: float = 1.5
+    # Fine alignment: turn in place, then walk in along the line, steering.
+    min_turn: float = 0.75               # in-place turns below ~0.7 rad/s don't happen at all
+    turn_first: float = math.radians(15)  # heading error above this: turn in place before walking in
+    walk_in_v: float = 0.3               # forward command while walking in (~0.08 m/s achieved)
+    stop_lead: float = 0.004             # stop when the ball is this far short of the spot (m)
+    align_turn_gain: float = 1.5         # rad/s of steering per rad of heading error
+    align_lat_gain: float = 10.0         # steer this much off the goal line per m of sideways error...
+    align_max_cut: float = math.radians(30)  # ...up to this angle (like a car's lane keeping)
     align_max_turn: float = 0.5
     align_timeout_s: float = 15.0
     # Kick and after
@@ -240,7 +247,7 @@ class KickBrain:
         self.target = target
 
         rel = ball_in_duck_frame(s.duck_xy, s.duck_yaw, target)
-        cp = ChaserParams(max_forward=p.max_forward, max_turn=p.max_turn,
+        cp = ChaserParams(max_forward=p.max_forward, min_forward=p.min_forward, max_turn=p.max_turn,
                           catch_radius=p.approach_radius, slow_radius=0.3)
         cmd, dist, _ = chase_command(rel, cp)
         if target is pre and dist < p.approach_radius:
@@ -269,23 +276,38 @@ class KickBrain:
         if err < 0.8 * p.tolerance and abs(h) < p.heading_tol:
             self._set("SETTLE", s.t, f"lined up ({err * 1000:.0f} mm off)")
             return act
-        if dt_state > p.align_timeout_s:
-            self.events["retries"].append({"t": s.t, "err_m": round(err, 4)})
-            self._set("APPROACH", s.t, "couldn't line up, trying again")
+        if p.assist and err < p.assist_radius and abs(h) < 3 * p.heading_tol and e[0] < p.stop_lead:
+            self._set("SETTLE", s.t, f"close enough for an assist ({err * 1000:.0f} mm off)")
             return act
-        # Move so the ball's error shrinks: if the ball is too far ahead, step
-        # forward; too far left, step left. Plus turn to face the goal.
-        v = p.align_gain * e
-        n = float(np.linalg.norm(v))
-        if n > p.align_max_v:
-            v *= p.align_max_v / n
-        elif n < p.align_min_v and err > p.tolerance / 2:
-            v *= p.align_min_v / max(n, 1e-9)
-        wz = float(np.clip(p.align_turn_gain * h, -p.align_max_turn, p.align_max_turn))
-        if abs(h) > math.radians(25):
-            v[:] = 0.0          # facing well off: turn on the spot first, then shuffle
-        act.cmd = np.array([v[0], v[1], wz], dtype=np.float32)
+        if dt_state > p.align_timeout_s:
+            return self._retry(s, err, "couldn't line up, trying again")
+        # e = ball minus spot, in the duck's frame: e[0] > 0 means the ball is
+        # still ahead of the spot, e[1] > 0 that it's too far to the left.
+        # Steer like a car onto the line: aim off the goal direction, towards
+        # the side the duck needs to move to, by an angle that shrinks as the
+        # sideways error does. `hd` is the heading error from that.
+        cut = float(np.clip(math.atan(p.align_lat_gain * e[1]), -p.align_max_cut, p.align_max_cut))
+        hd = _wrap(h + cut) if e[0] > p.stop_lead else h
+        if abs(hd) > p.turn_first:
+            # Facing well off: turn on the spot first (hard enough to beat the dead zone).
+            act.cmd = np.array([0.0, 0.0, math.copysign(p.min_turn, hd)], dtype=np.float32)
+        elif e[0] > p.stop_lead:
+            wz = float(np.clip(p.align_turn_gain * hd, -p.align_max_turn, p.align_max_turn))
+            act.cmd = np.array([p.walk_in_v, 0.0, wz], dtype=np.float32)
+        elif e[0] < -p.tolerance:
+            # Walked past it. The duck can't step back, so go round again.
+            return self._retry(s, err, "overshot the ball")
+        elif abs(h) > p.heading_tol:
+            act.cmd = np.array([0.0, 0.0, math.copysign(p.min_turn, h)], dtype=np.float32)
+        else:
+            # Right depth, facing the goal, but off to the side: no sidestep, so retry.
+            return self._retry(s, err, f"{abs(e[1]) * 1000:.0f} mm off to the side")
         return act
+
+    def _retry(self, s, err, why):
+        self.events["retries"].append({"t": s.t, "err_m": round(err, 4), "why": why})
+        self._set("APPROACH", s.t, why)
+        return Action()
 
     def _settle(self, s: Snapshot, dt_state):
         p, act = self.p, Action()

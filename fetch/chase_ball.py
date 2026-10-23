@@ -150,6 +150,8 @@ def main():
     sim.add_common_args(ap)
     ap.add_argument("--give-up", type=float, default=25.0, help="seconds before a ball is respawned")
     ap.add_argument("--max-forward", type=float, default=ChaserParams.max_forward)
+    ap.add_argument("--min-forward", type=float, default=ChaserParams.min_forward,
+                    help="smallest forward command sent (the walking policy ignores less)")
     ap.add_argument("--max-turn", type=float, default=ChaserParams.max_turn)
     ap.add_argument("--turn-gain", type=float, default=ChaserParams.turn_gain)
     ap.add_argument("--catch-radius", type=float, default=ChaserParams.catch_radius)
@@ -160,7 +162,7 @@ def main():
     walk = sim.walking_policy(args.policy, args.policy_revision)
     model, data, bam_ctrl, policy = sim.build_sim(ip, rl_repo, walk, use_bam=not args.no_bam)
 
-    params = ChaserParams(max_forward=args.max_forward, max_turn=args.max_turn,
+    params = ChaserParams(max_forward=args.max_forward, min_forward=args.min_forward, max_turn=args.max_turn,
                           turn_gain=args.turn_gain, catch_radius=args.catch_radius)
     duck = sim.Duck(model, data, bam_ctrl, policy, np.random.default_rng(args.seed))
     chase = Chase(duck, params, give_up_s=args.give_up)

@@ -21,7 +21,11 @@ class ChaserParams:
     # Command limits — kept inside the ranges the walking policy was trained on
     # (velocity recipe: vx in ±0.4 m/s, wz in ±1.0 rad/s). Going outside them is
     # asking the policy to do something it has never practised.
-    max_forward: float = 0.25   # m/s
+    max_forward: float = 0.4    # m/s
+    # velstand has a big dead zone: from a stand it ignores vx below ~0.25 m/s
+    # (and walks at only ~30% of the command once going; Pollen's own bench:
+    # 0.4 -> 0.17 m/s). So any forward command is at least this. 0 = ideal legs.
+    min_forward: float = 0.3    # m/s
     max_turn: float = 0.9       # rad/s
     turn_gain: float = 1.5      # rad/s of turn per rad of bearing error
     # Only walk forward when roughly facing the ball; beyond this bearing,
@@ -63,8 +67,11 @@ def chase_command(rel_ball, p: ChaserParams = ChaserParams()):
 
     # Walk forward only when facing it; fade speed in as the bearing closes
     # and fade it out as we arrive, so the duck doesn't trip over the ball.
+    # The fade runs from min_forward (not 0) so the command never sits in the
+    # walking policy's dead zone, where the duck just stands there.
     facing = max(0.0, 1.0 - abs(bearing) / p.walk_cone)
     arriving = float(np.clip((dist - p.catch_radius) / (p.slow_radius - p.catch_radius), 0.3, 1.0))
-    vx = p.max_forward * facing * arriving
+    speed = facing * arriving
+    vx = p.min_forward + (p.max_forward - p.min_forward) * speed if speed > 0 else 0.0
 
     return np.array([vx, 0.0, wz], dtype=np.float32), dist, bearing

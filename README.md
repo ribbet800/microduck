@@ -67,14 +67,16 @@ Saves to `runs/chase_<time>/`:
 
 ### Things to try
 
-- Tune the brain: `--max-forward 0.35 --turn-gain 2.5` (faster, more aggressive), or edit `fetch/chaser.py`. Keep forward ≤ 0.4 m/s and turn ≤ 1.0 rad/s, the ranges the walking policy was trained on.
+- Tune the brain: `--turn-gain 2.5` (more aggressive), or edit `fetch/chaser.py`. Keep forward ≤ 0.4 m/s and turn ≤ 1.0 rad/s, the ranges the walking policy was trained on.
+  The walking policy has a big **dead zone**: from a stand it ignores forward commands below ~0.25 m/s and turns below ~0.7 rad/s, never sidesteps or walks backwards, and walks at only ~30% of the commanded speed. So the brains never send less than `--min-forward` (0.3); set it to 0 to see the duck freeze near the ball.
 - `--no-bam` swaps Pollen's realistic servo model for ideal PD servos. Compare how much worse/better it gets.
 - `uv run pytest` checks the brain against an ideal walker (if it can't catch the ball with perfect legs, it won't with real ones).
 
 ## Kick loop: the duck plays football against itself
 
-A separate game. The duck walks round behind the ball, shuffles until the ball
-sits exactly in front of one foot, stands still, then swaps in Pollen's **kick
+A separate game. The duck walks round behind the ball, turns to face the goal,
+walks in along the ball→goal line steering like a car until the ball sits
+exactly in front of one foot, stands still, then swaps in Pollen's **kick
 policy**. Roll the ball into the goal it's attacking to score; then it attacks
 the other end.
 

@@ -15,20 +15,30 @@ are quick to try and good to watch.
 
 | Thing | Status |
 |---|---|
-| `fetch/chase_ball.py`: Fetch Stage 0, hand-coded ball chaser | Built. Pipeline tested in MuJoCo with a **stand-in** policy only |
-| `kick/kick_loop.py`: duck plays football against itself | Built. Brain tested with an ideal duck (9 goals from 10 kicks); MuJoCo pipeline tested with stand-in policies only |
-| `common/sim.py`: shared setup, Duck wrapper, live/headless runners | Built |
-| Runs on Jack's Windows laptop | Setup done; first live run still pending (see §6) |
+| `fetch/chase_ball.py`: Fetch Stage 0, hand-coded ball chaser | Works with the real velstand policy (headless): 9 balls / 90 s, 0 falls |
+| `kick/kick_loop.py`: duck plays football against itself | Works with the real policies (headless): 3 goals from 5 kicks / 240 s, 0 whiffs, 0 falls. Approach still bumps the ball (§2) |
+| `common/sim.py`: shared setup, Duck wrapper, live/headless runners | Built; matches Pollen's `infer_policy.py` main loop |
+| Runs on Jack's Windows laptop | Headless runs done (§7); first *live viewer* run still pending |
 
-**Most important caveat:** nothing has yet been run with Pollen's *real*
-trained policies. The dev sandbox couldn't reach Hugging Face. So the
-following are all unverified:
-- whether the Hub repo and file names are right (`pollen-robotics/microduck-policies`, `velstand.onnx`, `ball_kick_{left,right}.onnx`)
-- how well the walking policy tracks the chaser's commands
-- whether the kick line-up converges
+Hub repo and file names are confirmed (`pollen-robotics/microduck-policies`:
+`velstand.onnx`, `ball_kick_{left,right}.onnx`).
 
-The first job for whoever picks this up is to run both games with real
-policies and write down what happens (§2).
+### The legs (velstand v8) in MuJoCo, measured 2026-10-23 with BAM
+
+The brains are written around these numbers; `tests/test_kick_brain.py:lazy_legs` models them.
+
+| command | what happens |
+|---|---|
+| vx < ~0.25 m/s from a stand (0.05, 0.1, 0.15 all 0) | nothing: stands still |
+| vx 0.2 / 0.3 / 0.4 | 0.04 / 0.08 / 0.11 m/s (~30%; Pollen's bench says 0.4 → 0.17) |
+| once walking, vx 0.15 / 0.1 | keeps walking (0.05 m/s) / stops |
+| vy up to 0.3 (standing or walking) | ~nothing: no sidestep |
+| vx −0.2 | nothing: no walking backwards |
+| turn in place 0.3 / 0.6 / 0.7 / 0.8 | 0 / 0 (bimodal, sometimes −0.59) / 0.57 / 0.73 rad/s |
+| 0.25 m/s pulses of 0.1–0.4 s | 0 mm: too short to start a gait |
+| stopping from walking | coasts ~4 mm back, 7–11 mm sideways |
+
+Same picture with `--no-bam`, so it's the policy, not the servo model.
 
 ### Facts worth knowing (checked in Pollen's code, `microduck_rl` @ b02fdea, 2026-10-12)
 
@@ -67,15 +77,16 @@ policies and write down what happens (§2).
    - then the same with `--assist`, and the same with `--no-bam`
 4. Record results in §7 (log): balls/min, falls, goals, kicks, line-up error, whiffs.
 
-**Likely tuning needed** (guesses to check):
-- **Chaser:** turn gain may be too high (wobbly) or too low (wide arcs). Check the
-  commanded-vs-achieved panel in `timeseries.png` for lag and saturation.
-- **Kick line-up:** velstand may not move at all for tiny commands (a dead zone).
-  `KickParams.align_min_v` (0.025 m/s) is there for this; raise it if ALIGN stalls.
-  If the duck overshoots, lower `align_gain` or `align_max_v`.
+**Tuning still open** (headless runs done 2026-10-23, see §7; live viewer not yet):
+- **Approach bumps the ball** (biggest loss: 8 "outs" in 240 s, mostly while approaching).
+  Watch it live / in `topdown.png`. Likely fixes: widen `go_round`, or keep a minimum
+  distance from the ball in `_approach` (walk to a waypoint round it, not past it).
+- **Settle drift:** the duck sometimes drifts from ~8 mm to ~20 mm while standing still for
+  `settle_s`. Try a shorter `settle_s`.
 - **Tolerance:** check whether the kick actually needs 12 mm. `alignment.png`'s right panel
-  (error vs ball speed) answers this. If kicks at 20 mm still fly, loosen `--tolerance`.
-- **Approach:** the duck may bump the ball while circling round it. Widen `go_round`.
+  (error vs ball speed) answers this. Pollen trained with ±15 mm, so 15 mm may be fine.
+- **Chaser:** ~10 s per ball now, limited by the legs (~0.1 m/s). Check the
+  commanded-vs-achieved panel in `timeseries.png` for turn lag.
 
 ---
 
@@ -218,3 +229,13 @@ Add dated entries: what was tried, numbers, what was learned.
   150 s (with ±0.15 rad kick noise) and walks round the ball when on the wrong side. One bug
   found and fixed through the plots: goals scored mid-kick weren't counted. Not yet run with
   real policies.
+- **2026-10-23 (later):** First headless runs with the real Hub policies on Jack's laptop
+  (BAM on, ~5–6× real time). Before: fetch 4 balls / 90 s (~18 s each, duck stalled near the
+  ball); kick loop **0 kicks** in 180 s (stalled on approach, never reached ALIGN). Cause:
+  velstand's dead zone (table in §1). Fixes: chaser `min_forward` (every forward command
+  ≥ 0.3, default max raised to 0.4); kick ALIGN redesigned from holonomic shuffling to
+  turn-in-place + car-style walk-in along the ball→goal line (25 cm run-in, overshoot or
+  sideways miss = retry); `--assist` now actually triggers (it used to need the duck to be
+  lined up already); `lazy_legs` ideal-world tests; `uv run pytest` no longer collects
+  Pollen's tests. After: fetch **9 balls / 90 s**, 0 falls; kick **3 goals / 5 kicks / 240 s**,
+  0 whiffs, mean line-up 8.6 mm; with `--assist` 3 goals / 7 kicks (3 assisted).
