@@ -83,6 +83,20 @@ trained maximum command, so the levers are in ALIGN:
   "carrot" on the aim line during APPROACH so the duck arrives facing along it: 14.0 vs 15.7
   kicks / 5 min (the longer path costs more than the turning saved).
 - **Aim spread** (3 seeds x 300 s): ±30° 13.3, **±60° 15.7**, ±90° 12.7 kicks. ±60° stays.
+- **Accidental knocks** (~11 per 5 min, as many as kicks). Two kinds: (a) harmless — after
+  WATCH says "stopped" (5 cm/s) the ball creeps another 3–4.5 cm and trips the 5 cm "knocked"
+  check, which only re-picks the aim; (b) real — after a retry the duck is standing at the
+  kick stance and turns round on the spot to walk back, and a turning foot sweeps the ball
+  (any in-place turn > ~30° there touches it). Tried and rejected: kick at up to 20 mm
+  instead of retrying (16.0 vs 15.7 kicks, whiffs 0.7 -> 1.7); "pivot" a ≤15° turn on the spot
+  to swing the kick spot onto the ball and kick that way (6 seeds: 15.7 vs 15.8 kicks; fewer
+  retries but no faster). Also tried, no better (6 seeds each): ignore the creep (knocks
+  11.7 -> 4.5, kicks 15.8 -> 14.7) and pick the aim only once within 0.6 m of the ball (14.8).
+  Untried: after a retry, first walk forward-diagonally away from the ball before turning round.
+- **Conclusion so far:** ~15 kicks / 5 min looks set by the legs (walking ~0.1 m/s, turning
+  bursts). Differences under ~1.5 kicks are noise at 6 seeds: each code change shifts the
+  random aim sequence, so runs aren't paired. Bigger wins probably need better legs (a faster
+  walking policy) or a different game (shorter rolls: `--ball-roll 0.5`).
 - **Chaser:** ~10 s per ball, limited by the legs. Check `timeseries.png` for turn lag.
 
 `runs/` sweeps: `--seed` makes runs repeatable; compare several seeds, single runs are noisy
