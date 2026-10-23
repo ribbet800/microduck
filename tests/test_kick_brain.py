@@ -1,4 +1,4 @@
-"""Checks the kick-loop brain with an imaginary perfect duck.
+"""Checks the kick-loop brain with an imaginary duck.
 
 The ideal duck moves exactly as commanded (forward, sideways, turn) and has a
 "kick" that launches the ball straight ahead at 1 m/s — but only if the ball is
@@ -6,7 +6,7 @@ genuinely on the kick spot, like Pollen's blind kick policy. If the brain can't
 kick well with perfect legs, it won't with real ones.
 
 `lazy=True` gives it legs like Pollen's velstand in MuJoCo instead (see
-`lazy_legs`): a big dead zone, no sidestep, no walking backwards, ~30% speed.
+tests/legs.py): a big dead zone, no sidestep, no walking backwards, ~30% speed.
 """
 
 import math
@@ -17,24 +17,12 @@ import numpy as np
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(REPO), str(REPO / "kick")]
-from brain import KickBrain, KickParams, Snapshot  # noqa: E402
+sys.path[:0] = [str(REPO), str(REPO / "kick"), str(REPO / "tests")]
+from brain import KickBrain, KickParams  # noqa: E402
+from common.brain import Snapshot  # noqa: E402
+from legs import lazy_legs  # noqa: E402
 
 DT = 0.02
-
-
-def lazy_legs(cmd, walking):
-    """What velstand actually does with a command (measured in MuJoCo with BAM,
-    2026-10-23): it only starts walking at vx >= ~0.25 m/s or |wz| >= ~0.7 rad/s,
-    keeps going down to vx 0.15 once walking, never sidesteps or walks
-    backwards, and reaches ~30% of the commanded forward speed.
-    Returns (vx, vy, wz achieved, walking)."""
-    vx, _, wz = (float(c) for c in cmd)
-    if vx >= (0.15 if walking else 0.25):
-        return 0.3 * vx, 0.0, 0.8 * wz, True
-    if abs(wz) >= 0.7:
-        return 0.0, 0.0, 0.8 * wz, True
-    return 0.0, 0.0, 0.0, False
 
 
 class IdealWorld:
@@ -141,7 +129,7 @@ def test_stance_puts_ball_on_the_spot():
     ball = np.array([0.3, -0.2])
     b.pick_aim(snap_at((0.0, 0.0), ball))
     for foot in ("right", "left"):
-        stance, a = b.stance_for(ball, foot)
+        stance, a = b.stance_for(ball, foot), b.aim
         yaw = math.atan2(a[1], a[0])
         d = ball - stance
         rel = [math.cos(yaw) * d[0] + math.sin(yaw) * d[1], -math.sin(yaw) * d[0] + math.cos(yaw) * d[1]]
@@ -190,7 +178,7 @@ def test_picks_the_foot_whose_stance_is_nearer(foot):
     b = KickBrain(KickParams(), ["left", "right"])
     ball = np.zeros(2)
     b.pick_aim(snap_at((-0.5, 0.0), ball))
-    stance, a = b.stance_for(ball, foot)
+    stance, a = b.stance_for(ball, foot), b.aim
     b._approach(Snapshot(0.0, stance - 0.3 * a, float(math.atan2(a[1], a[0])), ball, 0.0, False, False))
     assert b.foot == foot
 
@@ -256,3 +244,26 @@ def test_never_kicks_unaligned_without_assist():
     brain = play_sloppy(KickParams())
     assert brain.events["retries"], "should have given up on the sloppy attempt"
     assert all(k["err_m"] <= KickParams().tolerance and not k["assisted"] for k in brain.events["kicks"])
+
+
+def test_kick_that_never_starts_does_not_hang():
+    # Legs that ignore the kick request: the brain must give up and try again.
+    w, brain, reasons = IdealWorld(), KickBrain(KickParams(), ["right"]), set()
+    for _ in range(int(25 / DT)):
+        act = brain.update(w.snap())
+        act.kick = None
+        w.apply(act, brain)
+        reasons.add(brain.last_change)
+    assert any("never started" in r for r in reasons)
+    assert not brain.events["kicks"]
+
+
+def test_falls_go_to_recover_and_back():
+    brain = KickBrain(KickParams(), ["right"])
+    s = snap_at((-0.4, 0.0), (0.0, 0.0))
+    brain.update(s)
+    s.fallen, s.t = True, 1.0
+    assert not brain.update(s).cmd.any() and brain.state == "RECOVER"
+    s.fallen, s.t = False, 3.0
+    brain.update(s)
+    assert brain.state == "APPROACH" and "back up" in brain.last_change

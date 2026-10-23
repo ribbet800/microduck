@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Circle, Rectangle
 
+from brain import WHIFF_SPEED
+
 STATE_ORDER = ["APPROACH", "ALIGN", "SETTLE", "KICK", "WATCH", "RECOVER"]
 STATE_COLOURS = {"APPROACH": "#4C78A8", "ALIGN": "#F2CF5B", "SETTLE": "#E8A33D",
                  "KICK": "#D9534F", "WATCH": "#B5B5B5", "RECOVER": "#7B3F99"}
@@ -137,7 +139,7 @@ def alignment(events, p, path):
         colours = ["tab:purple" if k["assisted"] else "tab:blue" for k in kicks]
         ax.scatter(errs, speeds, c=colours, s=40, edgecolors="k", lw=0.5)
     ax.axvline(1000 * p.tolerance, color="tab:green", ls="--", lw=1, label="tolerance")
-    ax.axhline(0.2, color="tab:red", ls=":", lw=1, label="below this = whiff")
+    ax.axhline(WHIFF_SPEED, color="tab:red", ls=":", lw=1, label="below this = whiff")
     ax.set_xlabel("line-up error at kick (mm)")
     ax.set_ylabel("ball speed after kick (m/s)")
     ax.set_title("Does precision matter?\n(purple = assisted)")
