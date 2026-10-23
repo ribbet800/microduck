@@ -133,21 +133,18 @@ class KickLoop(Game):
         return ["topdown.png", "alignment.png", "aiming.png", "timeline.png"]
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sim.add_common_args(ap)
+def add_kick_args(ap):
+    """Options every kick game shares (on top of sim.add_common_args)."""
     ap.add_argument("--kick-left", type=str, default=None, help="left-foot kick policy ONNX (default: from the Hub)")
     ap.add_argument("--kick-right", type=str, default=None, help="right-foot kick policy ONNX (default: from the Hub)")
     ap.add_argument("--feet", choices=["both", "left", "right"], default="both")
     ap.add_argument("--assist", action="store_true", help="nudge the ball onto the kick spot when close")
     ap.add_argument("--tolerance", type=float, default=KickParams.tolerance, help="line-up tolerance (m)")
-    ap.add_argument("--aim-spread", type=float, default=math.degrees(KickParams.aim_spread),
-                    help="random aim: up to this many degrees either side of the duck->ball direction")
-    ap.add_argument("--arena", type=float, default=KickParams.arena_radius,
-                    help="soft arena radius (m): outside it, kicks aim back towards the middle")
-    ap.add_argument("--follow", action="store_true", help="camera follows the duck instead of showing the arena")
-    args = ap.parse_args()
+    ap.add_argument("--follow", action="store_true", help="camera follows the duck instead of showing the whole area")
 
+
+def make_kick_duck(args):
+    """The duck with the walking policy plus the kick policies for `--feet`. Returns (duck, feet)."""
     train_hint = ("or train one in microduck_rl: `uv run train Mjlab-BallKick-Flat-MicroDuck` "
                   "(KICK_FOOT at the top of microduck_ball_kick_env_cfg.py picks the foot), "
                   "then export it, and pass --kick-right / --kick-left")
@@ -157,8 +154,20 @@ def main():
         given = getattr(args, f"kick_{foot}")
         paths[foot] = given or sim.hub_policy(["kick", foot], f"{foot}-foot kick", args.policy_revision,
                                               exact=f"ball_kick_{foot}.onnx", how_to_train=train_hint)
+    return sim.make_duck(args, kick_left=paths.get("left"), kick_right=paths.get("right")), feet
 
-    duck = sim.make_duck(args, kick_left=paths.get("left"), kick_right=paths.get("right"))
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sim.add_common_args(ap)
+    add_kick_args(ap)
+    ap.add_argument("--aim-spread", type=float, default=math.degrees(KickParams.aim_spread),
+                    help="random aim: up to this many degrees either side of the duck->ball direction")
+    ap.add_argument("--arena", type=float, default=KickParams.arena_radius,
+                    help="soft arena radius (m): outside it, kicks aim back towards the middle")
+    args = ap.parse_args()
+
+    duck, feet = make_kick_duck(args)
     params = KickParams(assist=args.assist, tolerance=args.tolerance,
                         aim_spread=math.radians(args.aim_spread), arena_radius=args.arena)
     brain = KickBrain(params, feet, rng=np.random.default_rng(args.seed))

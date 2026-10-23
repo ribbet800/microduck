@@ -6,11 +6,13 @@ the brain only decides which command to send them. No MuJoCo in here, so
 brains can be tested against an imaginary duck (see tests/).
 
 Any object with these works as a brain (subclassing `Brain` gives you the
-last three for free):
+last four for free):
     update(snapshot) -> Action
     state            name of what it's doing now, e.g. "APPROACH"
     last_change      why it last changed state (shown in the viewer)
     events           dict of event lists the brain records (saved to events.json)
+    plan             the route it means to walk now: world (x, y) points starting
+                     at the duck, or [] (drawn in the viewer)
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ class Brain:
         self.state_t0 = 0.0
         self.last_change = ""
         self.events: dict[str, list] = {}
+        self.plan: list = []
 
     def set_state(self, state, t, why=""):
         """Switch state (or restart the current one, if there's a reason to say why)."""

@@ -26,8 +26,10 @@ class ChaseBrain(Brain):
         if s.fallen:
             if self.state != "RECOVER":
                 self.set_state("RECOVER", s.t, "fell over")
+            self.plan = []
             return Action()
         if self.state == "RECOVER":
             self.set_state("CHASE", s.t, "back up")
+        self.plan = [np.array(s.duck_xy, float), np.array(s.ball_xy, float)]
         cmd, _, _ = steer_to(to_duck_frame(s.duck_xy, s.duck_yaw, s.ball_xy), self.p)
         return Action(cmd=np.asarray(cmd, dtype=np.float32))

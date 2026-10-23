@@ -159,6 +159,7 @@ class KickBrain(Brain):
         if self.aim is None:
             self.pick_aim(s)
         dt_state = s.t - self.state_t0
+        self.plan = []                   # APPROACH and ALIGN fill it in
 
         # Falls trump everything. (The game loop records them: common/game.py.)
         if s.fallen and self.state != "RECOVER":
@@ -250,11 +251,13 @@ class KickBrain(Brain):
         ahead = float(np.dot(to_duck, a))
         side = float(np.dot(to_duck, left_of(a)))
         going_round = ahead > -0.05 and abs(side) < p.go_round
+        pre = self.stance - p.standoff * a                 # the pre-stance point
         if going_round:
             sgn = 1.0 if side >= 0 else -1.0
             self.target = s.ball_xy + sgn * (p.go_round + 0.05) * left_of(a) - 0.1 * a
         else:
-            self.target = self.stance - p.standoff * a     # the pre-stance point
+            self.target = pre
+        self.plan = [np.array(s.duck_xy, float), self.target] + ([pre] if going_round else []) + [self.stance]
 
         cmd, dist, _ = steer_to(to_duck_frame(s.duck_xy, s.duck_yaw, self.target), self._steer)
         if not going_round and dist < p.approach_radius:
@@ -280,6 +283,7 @@ class KickBrain(Brain):
         # "Got away" is judged in the world (how far the duck is from the kick
         # stance), not in the duck's frame, which swings wildly while turning.
         stance, a = self.stance_for(s.ball_xy, self.foot), self.aim
+        self.plan = [np.array(s.duck_xy, float), stance]
         if np.linalg.norm(stance - s.duck_xy) > p.standoff + p.got_away:
             self.set_state("APPROACH", s.t, "ball got away")
             return act
