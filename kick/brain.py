@@ -411,3 +411,29 @@ class KickBrain(Brain):
         self.set_state("KICK", s.t, f"{self.foot} foot, aiming {self.aim_deg:+.0f}°, "
                        + ("assisted" if assisted else f"{err * 1000:.0f} mm off"))
         return act
+
+
+class KickbackBrain(KickBrain):
+    """The same brain, kicking the ball back and forth along a straight line.
+
+    Every kick aims back the way the last one went: at the end of the line
+    behind the last kick's direction (the first kick: away from the duck). The
+    aim points at that end from wherever the ball stopped, so a ball that drifted
+    off the line is sent back towards it (aim_mode "line"). Everything else is
+    KickBrain's.
+    """
+
+    def __init__(self, params: KickParams, feet: list[str], ends):
+        super().__init__(params, feet)
+        self.ends = [np.asarray(e, float) for e in ends]
+
+    def pick_aim(self, s: Snapshot):
+        ball = np.asarray(s.ball_xy, float)
+        if self.events["kicks"]:
+            back = -np.asarray(self.events["kicks"][-1]["aim"])
+        else:
+            back = ball - np.asarray(s.duck_xy, float)
+        end = max(self.ends, key=lambda e: float(np.dot(e - ball, back)))
+        d = end - ball
+        self.aim = d / max(float(np.linalg.norm(d)), 1e-9)
+        self.aim_from, self.aim_mode = ball, "line"

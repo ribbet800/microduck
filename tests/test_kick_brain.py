@@ -18,7 +18,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(REPO), str(REPO / "kick"), str(REPO / "tests")]
-from brain import KickBrain, KickParams  # noqa: E402
+from brain import KickbackBrain, KickBrain, KickParams  # noqa: E402
 from common.brain import Snapshot  # noqa: E402
 from legs import lazy_legs  # noqa: E402
 
@@ -300,3 +300,39 @@ def test_falls_go_to_recover_and_back():
     s.fallen, s.t = False, 3.0
     brain.update(s)
     assert brain.state == "APPROACH" and "back up" in brain.last_change
+
+
+# -- kickback --------------------------------------------------------------------
+
+ENDS = ((-0.5, 0.0), (0.5, 0.0))
+
+
+@pytest.mark.parametrize("duck_x, first", [(-0.45, +1.0), (0.45, -1.0)])
+def test_kickback_first_kick_goes_away_from_the_duck(duck_x, first):
+    b = KickbackBrain(KickParams(), ["right"], ENDS)
+    b.pick_aim(snap_at((duck_x, 0.0), (0.0, 0.0)))
+    assert b.aim == pytest.approx([first, 0.0]) and b.aim_mode == "line"
+
+
+@pytest.mark.parametrize("ball", [(0.7, 0.2), (0.1, 0.2)])
+def test_kickback_kicks_back_towards_the_line_whatever_the_roll(ball):
+    # The last kick went +x. Whether the ball rolled past the right end or stopped
+    # short of it (and drifted off the line), the next kick goes back to the left end.
+    b = KickbackBrain(KickParams(), ["right"], ENDS)
+    b.events["kicks"].append({"aim": [1.0, 0.0]})
+    b.pick_aim(snap_at((0.0, 0.0), ball))
+    d = np.array([-0.5, 0.0]) - np.array(ball)
+    assert b.aim == pytest.approx(d / np.linalg.norm(d))
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_kickback_goes_back_and_forth_along_the_line(lazy):
+    w = IdealWorld(duck_xy=(-0.45, 0.0), kick_noise=0.05, lazy=lazy)
+    brain = KickbackBrain(KickParams(), ["left", "right"], ENDS)
+    for _ in range(int((200 if lazy else 100) / DT)):
+        w.apply(brain.update(w.snap()), brain)
+    kicks = brain.events["kicks"]
+    assert len(kicks) >= 4, brain.events
+    signs = [np.sign(k["aim"][0]) for k in kicks]
+    assert all(a != b for a, b in zip(signs, signs[1:])), signs      # alternates
+    assert all(abs(k["end_xy"][1]) < 0.3 for k in finished(brain))   # stays near the line

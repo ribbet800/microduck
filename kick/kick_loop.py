@@ -126,7 +126,8 @@ class KickLoop(Game):
 
     def plots(self, out_dir):
         p = self.brain.p
-        kick_plots.topdown(self.log, self.events, p, str(out_dir / "topdown.png"))
+        kick_plots.topdown(self.log, self.events, p, str(out_dir / "topdown.png"),
+                           line=getattr(self.brain, "ends", None))
         kick_plots.alignment(self.events, p, str(out_dir / "alignment.png"))
         kick_plots.aiming(self.events, str(out_dir / "aiming.png"))
         kick_plots.timeline(self.log, self.events, p, str(out_dir / "timeline.png"))

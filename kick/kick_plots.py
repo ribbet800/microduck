@@ -21,12 +21,17 @@ def _arena(ax, p):
     ax.plot(0, 0, "+", color="0.6", ms=10, zorder=0)
 
 
-def topdown(log, events, p, path):
+def topdown(log, events, p, path, line=None):
     """Bird's-eye view: duck path, ball path, and every kick as two arrows from
     where the ball was: where it was aimed (grey) and where it actually went
-    (coloured by ball speed), both as long as the ball travelled."""
+    (coloured by ball speed), both as long as the ball travelled.
+    `line`: the two ends of kickback's line, drawn instead of the arena."""
     fig, ax = plt.subplots(figsize=(9, 8))
-    _arena(ax, p)
+    if line is None:
+        _arena(ax, p)
+    else:
+        (x0, y0), (x1, y1) = line
+        ax.plot([x0, x1], [y0, y1], "o--", color="0.6", lw=1, ms=8, mfc="none", zorder=0)
     ax.plot(log["duck_x"], log["duck_y"], color="0.35", lw=0.8, label="duck path", zorder=2)
     ax.plot(log["ball_x"], log["ball_y"], color="tab:orange", lw=0.8, alpha=0.8, label="ball path", zorder=2)
 
