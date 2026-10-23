@@ -37,11 +37,13 @@ class Kickback(KickLoop):
         if not follow:
             self.camera = {**self.camera, "distance": 3.0}
 
+    legend = KickLoop.legend[:-1] + [("faint line", "the line it kicks the ball along")]
+
     def draw_area(self, scn):
         a, b = self.brain.ends
-        overlay.line(scn, a, b, (1, 1, 1, 0.3), width=2.0, z=0.003)
+        overlay.line(scn, a, b, overlay.FAINT, width=2.0, z=overlay.Z_AREA)
         for end in (a, b):
-            overlay.disc(scn, end, 0.06, (1, 1, 1, 0.25), z=0.003)
+            overlay.disc(scn, end, 0.06, (*overlay.FAINT[:3], 0.25), z=overlay.Z_AREA)
 
     def summary(self):
         # How far from the line each kick left the ball (0 = dead straight back and forth).

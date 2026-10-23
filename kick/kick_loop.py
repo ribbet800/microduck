@@ -60,6 +60,7 @@ class KickLoop(Game):
                 "heading_err": b.heading_err if lined_up else float("nan")}
 
     # -- drawing ------------------------------------------------------------------
+    # The area's row comes last: a game that overrides draw_area swaps it.
     legend = Game.legend + [("yellow", "where the next kick should send the ball (orange: home), ball trail"),
                             ("red / green", "kick spot in front of the foot: green = ball on it"),
                             ("faint circle", "soft arena: outside it, kicks aim back home")]
