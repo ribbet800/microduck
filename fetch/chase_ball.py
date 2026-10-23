@@ -85,11 +85,11 @@ class Chase(Game):
     def log_row(self):
         return {**super().log_row(), "dist": self.dist, "bearing": self.bearing}
 
+    legend = Game.legend + [("green", "catch radius: inside it counts as reached")]
+
     def draw(self, scn):
         super().draw(scn)
-        d = self.duck
-        overlay.line(scn, d.xy, d.ball[:2])
-        overlay.disc(scn, d.ball[:2], self.catch_radius)
+        overlay.disc(scn, self.duck.ball[:2], self.catch_radius, (*overlay.GREEN[:3], 0.3))
 
     def status(self):
         return super().status() + [

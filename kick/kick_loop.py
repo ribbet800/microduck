@@ -41,8 +41,6 @@ import kick_plots  # noqa: E402
 class KickLoop(Game):
     """The brain does nearly everything here; the game draws it and keeps score."""
 
-    state_colours = {"APPROACH": overlay.BLUE, "ALIGN": overlay.YELLOW, "SETTLE": overlay.YELLOW,
-                     "KICK": overlay.RED, "WATCH": overlay.WHITE, "RECOVER": overlay.RED}
     trail_len = 150
 
     def __init__(self, duck: sim.Duck, brain: KickBrain, follow: bool):
@@ -62,31 +60,30 @@ class KickLoop(Game):
                 "heading_err": b.heading_err if lined_up else float("nan")}
 
     # -- drawing ------------------------------------------------------------------
+    legend = Game.legend + [("yellow", "where the next kick should send the ball (orange: home), ball trail"),
+                            ("red / green", "kick spot in front of the foot: green = ball on it"),
+                            ("faint circle", "soft arena: outside it, kicks aim back home")]
+
     def draw(self, scn):
         super().draw(scn)
         d, b, p = self.duck, self.brain, self.brain.p
-        # The soft arena: outside this circle, kicks aim back towards the middle.
-        n = 48
-        for i in range(n):
-            a0, a1 = 2 * math.pi * i / n, 2 * math.pi * (i + 1) / n
-            overlay.line(scn, (p.arena_radius * math.cos(a0), p.arena_radius * math.sin(a0)),
-                         (p.arena_radius * math.cos(a1), p.arena_radius * math.sin(a1)),
-                         (1, 1, 1, 0.3), width=2.0, z=0.003)
-        ball = d.ball[:2]
-        # Where it's aiming the next kick.
+        self.draw_area(scn)
+        overlay.trail(scn, self.ball_trail, overlay.YELLOW)
+        # Where the next kick should send the ball, from where it was aimed (so
+        # after a kick the ball's trail can be compared with it), about as far
+        # as a kick rolls.
         if b.aim is not None:
-            colour = (1.0, 0.55, 0.0, 0.7) if b.aim_mode == "home" else (1.0, 0.85, 0.1, 0.7)
-            overlay.line(scn, ball, ball + 0.6 * b.aim, colour, width=2.0)
-            # Where it's walking to right now, and the kick stance (ghost marker + facing arrow).
-            if b.state == "APPROACH":
-                overlay.sphere(scn, (b.target[0], b.target[1], 0.01), 0.012, overlay.BLUE)
-            overlay.sphere(scn, (b.stance[0], b.stance[1], 0.01), 0.01, (1, 1, 1, 0.7))
-            overlay.arrow(scn, b.stance, b.stance + 0.12 * b.aim, (1, 1, 1, 0.5), width=0.005, z=0.01)
+            start = b.aim_from + 0.04 * b.aim                        # from the ball's edge
+            overlay.arrow(scn, [start, b.aim_from + self.ball_roll * b.aim],
+                          overlay.ORANGE if b.aim_mode == "home" else overlay.YELLOW, width=4.0, z=overlay.Z_AIM)
         # The kick spot in front of the duck's foot: green when the ball is on it.
         spot = b.spot_world(d.xy, d.yaw)
-        on_spot = np.linalg.norm(spot - ball) < p.tolerance
-        overlay.disc(scn, spot, p.tolerance, (0.2, 0.95, 0.3, 0.6) if on_spot else (1.0, 0.3, 0.2, 0.45), z=0.004)
-        overlay.trail(scn, self.ball_trail, (1.0, 0.55, 0.0, 0.7), radius=0.005)
+        on_spot = np.linalg.norm(spot - d.ball[:2]) < p.tolerance
+        overlay.disc(scn, spot, p.tolerance, overlay.GREEN if on_spot else overlay.RED)
+
+    def draw_area(self, scn):
+        """The soft arena: outside this circle, kicks aim back towards the middle."""
+        overlay.circle(scn, (0.0, 0.0), self.brain.p.arena_radius)
 
     def status(self):
         b = self.brain
