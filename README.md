@@ -115,7 +115,9 @@ the ball was at each kick, drawn over the feet) and `timeline.png` (what the
 brain was doing, line-up error, ball speed).
 
 Options: `--aim-spread 30` makes the random aims tamer, `--arena 1.0` a smaller
-arena, `--seed` picks a different (repeatable) sequence of aims, `--assist`
+arena, `--ball-roll 2` lets a kick roll ~2 m instead of ~1 m (Pollen's own ball
+setting, `--ball-roll 0`, never slows down at all), `--seed` picks a different
+(repeatable) sequence of aims, `--assist`
 nudges the ball onto the spot when the duck gets close (Pollen's own demo always
 does this), `--feet right` uses one foot only, `--tolerance 0.02` makes it less
 fussy, `--follow` makes the camera follow the duck.
