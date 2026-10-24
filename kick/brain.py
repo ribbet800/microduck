@@ -7,9 +7,10 @@ straight ahead. So where the ball goes is decided by which way the duck faces
 when it kicks, and all the skill is in lining up.
 
 Each time the ball comes to rest, the brain picks a new random aim:
-  - inside the arena (within `arena_radius` of the origin): the direction from
-    the duck to the ball, give or take up to `aim_spread`. Roughly "onwards",
-    so the duck rarely has to walk round the ball (when it tends to knock it).
+  - inside the arena (within `arena_radius` of the origin): a direction between
+    "onwards" (from the duck to the ball, so the duck rarely has to walk round
+    it) and "back towards the middle", leaning further towards the middle the
+    further out the ball is (`centre_bias`), give or take up to `aim_spread`.
   - outside it: back towards the origin, give or take up to `home_spread`.
     A soft wall: the ball is never teleported.
 
@@ -59,8 +60,10 @@ def _on_circle(centre, radius, angle):
 @dataclass
 class KickParams:
     # Aiming: random, roughly onwards, inside a soft arena.
-    aim_spread: float = math.radians(60)   # aim = duck->ball direction ± up to this
+    aim_spread: float = math.radians(60)   # aim = the base direction ± up to this
     arena_radius: float = 1.5              # soft arena round the origin (m)
+    centre_bias: float = 1.0               # base direction: onwards, blended towards the middle by
+                                           # this x (ball's distance out / arena_radius); 0 = onwards
     home_spread: float = math.radians(45)  # outside it: aim back home ± up to this
     moved: float = 0.05                    # ball knocked this far since aiming (m): aim again
     # Where the kick policy expects the ball (microduck_ball_kick_env_cfg.py:
@@ -145,10 +148,15 @@ class KickBrain(Brain):
     def pick_aim(self, s: Snapshot):
         """Choose where the next kick should send the ball."""
         p, ball = self.p, np.asarray(s.ball_xy, float)
-        if np.linalg.norm(ball) > p.arena_radius:
+        out = float(np.linalg.norm(ball))
+        if out > p.arena_radius:
             base, spread, self.aim_mode = math.atan2(-ball[1], -ball[0]), p.home_spread, "home"
         else:
-            d = ball - s.duck_xy
+            onwards = ball - np.asarray(s.duck_xy, float)
+            onwards /= max(float(np.linalg.norm(onwards)), 1e-9)
+            home = -ball / max(out, 1e-9)
+            w = min(1.0, p.centre_bias * out / p.arena_radius)
+            d = (1 - w) * onwards + w * home        # (if they cancel out, atan2(0, 0) = 0: any way is fine)
             base, spread, self.aim_mode = math.atan2(d[1], d[0]), p.aim_spread, "free"
         ang = base + self.rng.uniform(-spread, spread)
         self.aim = np.array([math.cos(ang), math.sin(ang)])

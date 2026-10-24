@@ -90,8 +90,10 @@ Saves to `runs/chase_<time>/`:
 ## Kick loop: walk up, kick, follow, kick again
 
 A separate game. Each time the ball stops, the duck picks a **random direction**
-to kick it: roughly onwards (the duck→ball direction, ±60°), or back towards the
-middle once the ball is outside a 1.5 m **soft arena**. It gets behind the ball
+to kick it (±60° around a base direction). The base direction is "onwards" (the
+duck→ball direction) near the middle and leans more and more back towards the
+middle the further out the ball is, until it points straight home at the edge
+of a 1.5 m **soft arena**. It gets behind the ball
 (orbiting round it at a safe distance when the ball is in the way, so it arrives
 facing the right way), walks in along the line steering like a car
 until the ball sits exactly in front of one foot, stands still, then swaps in
@@ -127,7 +129,9 @@ the ball was at each kick, drawn over the feet) and `timeline.png` (what the
 brain was doing, line-up error, ball speed).
 
 Options: `--aim-spread 30` makes the random aims tamer, `--arena 1.0` a smaller
-arena, `--ball-roll 2` lets a kick roll ~2 m instead of ~1 m (Pollen's own ball
+arena, `--centre-bias 0.5` a weaker pull back to the middle (0 = always onwards;
+the default 1 keeps the ball outside the arena 5% of the time instead of 36%, at
+~12% fewer kicks a minute), `--ball-roll 2` lets a kick roll ~2 m instead of ~1 m (Pollen's own ball
 setting, `--ball-roll 0`, never slows down at all), `--seed` picks a different
 (repeatable) sequence of aims, `--assist`
 nudges the ball onto the spot when the duck gets close (Pollen's own demo always

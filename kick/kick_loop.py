@@ -164,11 +164,15 @@ def main():
                     help="random aim: up to this many degrees either side of the duck->ball direction")
     ap.add_argument("--arena", type=float, default=KickParams.arena_radius,
                     help="soft arena radius (m): outside it, kicks aim back towards the middle")
+    ap.add_argument("--centre-bias", type=float, default=KickParams.centre_bias,
+                    help="inside the arena, how strongly aims lean back towards the middle the further "
+                         "out the ball is (0 = always onwards, 1 = fully home at the arena's edge)")
     args = ap.parse_args()
 
     duck, feet = make_kick_duck(args)
     params = KickParams(assist=args.assist, tolerance=args.tolerance,
-                        aim_spread=math.radians(args.aim_spread), arena_radius=args.arena)
+                        aim_spread=math.radians(args.aim_spread), arena_radius=args.arena,
+                        centre_bias=args.centre_bias)
     brain = KickBrain(params, feet, rng=np.random.default_rng(args.seed))
     sim.run(duck, KickLoop(duck, brain, follow=args.follow), args, "kick")
 

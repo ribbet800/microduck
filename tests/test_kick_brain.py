@@ -106,6 +106,19 @@ def test_aims_are_random_and_roughly_onwards():
     assert min(angles) < -45 and max(angles) > 45      # really spread out, both ways
 
 
+@pytest.mark.parametrize("bias, expect_deg", [(1.0, 180), (0.0, 0)])
+def test_aims_lean_towards_the_middle_the_further_out_the_ball_is(bias, expect_deg):
+    # Ball 1.2 m out (inside the 1.5 m arena), duck behind it heading outwards.
+    # With the default bias the base direction is 80% "home": aims point inwards.
+    # With no bias it's the old "onwards" (outwards).
+    b = KickBrain(KickParams(centre_bias=bias), ["right"], rng=np.random.default_rng(4))
+    for _ in range(200):
+        b.pick_aim(snap_at((0.8, 0.0), (1.2, 0.0)))
+        assert b.aim_mode == "free"
+        off = abs((b.aim_deg - expect_deg + 180) % 360 - 180)
+        assert off <= 60 + 1e-9
+
+
 def test_aims_back_home_outside_the_arena():
     b = KickBrain(KickParams(), ["right"], rng=np.random.default_rng(2))
     for _ in range(300):

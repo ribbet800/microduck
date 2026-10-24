@@ -84,6 +84,11 @@ trained maximum command, so the levers are in ALIGN:
   "carrot" on the aim line during APPROACH so the duck arrives facing along it: 14.0 vs 15.7
   kicks / 5 min (the longer path costs more than the turning saved).
 - **Aim spread** (3 seeds x 300 s): ±30° 13.3, **±60° 15.7**, ±90° 12.7 kicks. ±60° stays.
+- **Centre bias** (2026-10-24, Jack's request: always lean back towards the middle). Base
+  direction = onwards blended towards home by `centre_bias` x distance out / arena radius.
+  6 seeds x 300 s, bias 0 / 0.5 / **1 (default)**: kicks 15.5 / 14.7 / 13.7; ball's mean
+  distance from the middle 1.25 / 1.07 / 0.82 m; time outside the arena 36% / 22% / 5%;
+  furthest 2.48 / 2.47 / 1.78 m. Fewer kicks because inward aims mean more getting round.
 - **Accidental knocks** (~11 per 5 min, as many as kicks). Two kinds: (a) harmless — after
   WATCH says "stopped" (5 cm/s) the ball creeps another 3–4.5 cm and trips the 5 cm "knocked"
   check, which only re-picks the aim; (b) real — after a retry the duck is standing at the

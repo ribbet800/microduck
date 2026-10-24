@@ -77,8 +77,10 @@ stateDiagram-v2
 | → RECOVER | trunk below 7.5 cm, from any state (a running kick is stopped) |
 | RECOVER → APPROACH | trunk back above 10.5 cm |
 
-New aims are random: roughly onwards (the duck->ball direction ±60°), or back
-towards the middle (±45°) when the ball is outside the 1.5 m arena.
+New aims are random, ±60° around a base direction that blends "onwards" (the
+duck->ball direction) with "back towards the middle": the further out the ball
+is, the more it leans home (`centre_bias` x distance out / 1.5 m arena radius).
+Outside the arena it's back towards the middle ±45°.
 
 Inside ALIGN the brain does one of: turn on the spot (facing over 15° off),
 walk in along the line steering like a car, or give up and retry. The real
