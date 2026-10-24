@@ -4,7 +4,8 @@ Fun experiments for a Microduck bipedal robot, built on top of Pollen Robotics'
 [microduck_rl](https://github.com/pollen-robotics/microduck_rl) training stack.
 Everything here runs in simulation, so it works before the robot arrives.
 
-Two games: **chase** (fetch, Stage 0) and the endless **kick loop**. For
+Two systems: **chase** (fetch, Stage 0) and **kicking** (the endless kick loop,
+and its kickback variant). For
 diagrams of how the brains loop through their states, and which parts are ours
 vs Pollen's pre-trained policies, see **[docs/how_it_works.md](docs/how_it_works.md)**.
 
@@ -44,15 +45,25 @@ uv run fetch/chase_ball.py             # Windows / Linux
 uv run mjpython fetch/chase_ball.py    # macOS (the MuJoCo viewer needs mjpython)
 ```
 
-What you're seeing in the viewer:
+What you're seeing in the viewer (every game; each colour means the same thing
+everywhere, and the bottom-left of the viewer repeats this):
 
 | Marker | Meaning |
 |---|---|
-| orange line | duck → ball: what it's aiming at |
+| cyan route | the brain's plan: the route it means to walk now, small arrowheads showing which way, a disc where it ends |
+| pink arrow | the command sent to the legs: where it would take the duck in the next 2 s |
+| white arrow | where the duck is **actually** going in the next 2 s, at its current (smoothed) speed and turn rate. Same scale as the pink one, so they'd overlap if the legs did exactly as told; when it's standing, a short stub showing which way it faces |
+| white line | where the duck has been |
 | green disc | the catch radius: inside it counts as "reached" |
-| blue arrow | the command being sent (longer = faster, swung by the turn command) |
-| white dots | trail of where the duck has been |
-| top-left text | time, the brain's state and why it last changed, falls, balls reached, distance, command |
+| top-left text | time, the brain's state and why it last changed, falls, balls reached, distance, command, playback speed |
+
+The white arrow is usually much shorter than the pink one: the walking policy
+walks at about 30% of the commanded speed.
+
+Keys: **space** pauses / resumes, **right arrow** steps one 50 Hz tick (and
+pauses), **-** / **+** halve / double the playback speed. `--speed 4` starts
+it at 4x (0.125-16x). The panel shows the speed asked for and, if the computer
+can't keep up, the speed it's actually managing (`4x (2.7x actual)`).
 
 Mess with it: double-click the ball to select it, then **Ctrl + right-drag** to shove it.
 
@@ -66,7 +77,7 @@ Saves to `runs/chase_<time>/`:
 
 - `topdown.png`: bird's-eye map: the duck's path coloured by time, numbered ball spawns, ★ where each ball was reached, ✕ falls
 - `timeseries.png`: distance to the ball, plus **commanded vs achieved** forward speed and turn rate (how well the legs follow the brain)
-- `video.mp4`: video with all the markers drawn in
+- `video.mp4`: video with all the markers drawn in (`--speed 2` makes it play at 2x, `--speed 0.5` in slow motion)
 - `summary.json`: balls reached, average time to reach, falls; `log.csv`: every step
 
 ### Things to try
@@ -80,8 +91,9 @@ Saves to `runs/chase_<time>/`:
 
 A separate game. Each time the ball stops, the duck picks a **random direction**
 to kick it: roughly onwards (the duck→ball direction, ±60°), or back towards the
-middle once the ball is outside a 1.5 m **soft arena**. It walks round behind
-the ball, turns to face that way, walks in along the line steering like a car
+middle once the ball is outside a 1.5 m **soft arena**. It gets behind the ball
+(orbiting round it at a safe distance when the ball is in the way, so it arrives
+facing the right way), walks in along the line steering like a car
 until the ball sits exactly in front of one foot, stands still, then swaps in
 Pollen's **kick policy**. Then it follows the ball and does it again.
 
@@ -98,15 +110,15 @@ APPROACH → ALIGN → SETTLE → KICK → WATCH (+ RECOVER after falls), drawn 
 every transition in [docs/how_it_works.md](docs/how_it_works.md). The viewer's
 top-left panel shows the current state and why it last changed.
 
+On top of the markers every game has (plan, command, actual motion: see
+above), the plan here ends where the duck has to stand to kick, and:
+
 | Marker | Meaning |
 |---|---|
+| yellow arrow | where the next kick should send the ball, about as far as a kick rolls (`--ball-roll`); **orange** when it's aiming back to the middle. It stays where the kick happened, so you can see how far off the ball went |
+| yellow line | where the ball has been |
+| small red / green disc | the kick spot in front of the foot: **green when the ball is on it** |
 | faint white circle | the soft arena |
-| yellow line from the ball | the next kick's aim (orange = heading back to the middle) |
-| small red/green disc | the kick spot in front of the foot: **green when the ball is on it** |
-| white dot + arrow | where the duck needs to stand, and which way to face |
-| blue dot | where it's walking to right now |
-| arrow from the duck | the command (colour = state: blue approach, yellow align, red kick) |
-| white / orange dots | duck and ball trails |
 
 Headless runs save `topdown.png` (every kick as two arrows: where it was aimed
 and where the ball actually went), `aiming.png` (direction error per kick, and
@@ -121,6 +133,22 @@ setting, `--ball-roll 0`, never slows down at all), `--seed` picks a different
 nudges the ball onto the spot when the duck gets close (Pollen's own demo always
 does this), `--feet right` uses one foot only, `--tolerance 0.02` makes it less
 fussy, `--follow` makes the camera follow the duck.
+
+### Kickback: back and forth on a line
+
+The same brain, kicking the ball back the way it last went, between the ends of
+a 1 m line (a ball that drifts off the line is steered back to it). Every kick
+means getting round the ball, so this is the orbit's showcase.
+
+```bash
+uv run kick/kickback.py
+uv run kick/kickback.py --headless --duration 180 --video
+```
+
+The faint white line with a disc at each end is the line; the rest of the
+markers are the kick loop's. `--length 1.5` makes the line longer (about one kick's roll, `--ball-roll`, works
+best); the kick loop's other options apply too. `summary.json` adds
+`mean_off_line_m`: how far from the line the kicks leave the ball.
 
 ## Roadmap
 
@@ -145,14 +173,16 @@ common/
 ├── game.py         # the loop every game shares: falls, Snapshot -> brain -> Action, logging, trails
 ├── brain.py        # what a brain sees (Snapshot) and says (Action), + state / last_change
 ├── steer.py        # "walk to that point" steering + frame geometry, used by both brains
-└── overlay.py      # debug markers drawn into the 3D scene
+└── overlay.py      # 3D markers and the one colour palette they share
 fetch/
 ├── chase_ball.py   # the chase game: rules (new ball, give up), drawing, plots
 ├── chaser.py       # its brain: CHASE / RECOVER
 └── plots.py
 kick/
 ├── kick_loop.py    # the kick game: drawing, score, plots
-├── brain.py        # its brain: approach / align / settle / kick / watch / recover
+├── kickback.py     # the same game kicking back and forth along a line
+├── brain.py        # its brain: approach (with orbit) / align / settle / kick / watch / recover,
+│                   #   and KickbackBrain (a different pick_aim)
 └── kick_plots.py
 docs/               # how_it_works.md: diagrams of the loop and both brains
 tests/              # brains checked against imaginary legs (uv run pytest)

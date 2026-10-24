@@ -18,7 +18,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(REPO), str(REPO / "kick"), str(REPO / "tests")]
-from brain import KickBrain, KickParams  # noqa: E402
+from brain import KickbackBrain, KickBrain, KickParams  # noqa: E402
 from common.brain import Snapshot  # noqa: E402
 from legs import lazy_legs  # noqa: E402
 
@@ -173,6 +173,39 @@ def test_walks_round_the_ball_when_on_the_wrong_side():
     assert w.min_ball_gap > 0.12        # never walked through the ball
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+def test_reversal_after_the_ball_leaves_the_arena(lazy):
+    # The duck followed the ball outwards and stands on its inner side; the next
+    # aim is back home, i.e. straight through the duck. It must orbit round the
+    # ball at a distance, not walk into it, and still kick.
+    w = IdealWorld(duck_xy=(1.3, 0.05), yaw=0.0, ball_xy=(1.7, 0.0), lazy=lazy)
+    brain = play(w, 60 if lazy else 30, feet=("left", "right"))
+    assert brain.events["kicks"], "never kicked"
+    assert brain.events["kicks"][0]["aim_mode"] == "home"
+    assert w.min_ball_gap > 0.2, w.min_ball_gap
+
+
+def test_orbit_route_goes_the_short_way_and_clears_the_ball():
+    b = KickBrain(KickParams(), ["right"])
+    ball = np.zeros(2)
+    b.aim, b.aim_from = np.array([1.0, 0.0]), ball      # kick towards +x
+    # The duck is in front of the ball, a little to its left (+y): the short way
+    # round is anticlockwise, over the left side.
+    s = Snapshot(0.0, np.array([0.35, 0.1]), math.pi, ball, 0.0, False, False)
+    b._approach(s)
+    assert b._orbit_dir == 1.0
+    route = b.plan[1:-2]                       # the orbit points (the last two are pre-stance, stance)
+    assert all(p[1] >= -1e-9 for p in route)   # stays on the left side
+    assert min(np.linalg.norm(p - ball) for p in route) > 0.35
+    assert b.plan[-1] == pytest.approx(b.stance_for(ball, "right"))
+    # Straight in when it's already on the line behind the ball (a fresh brain: not mid-orbit).
+    b = KickBrain(KickParams(), ["right"])
+    b.aim, b.aim_from = np.array([1.0, 0.0]), ball
+    pre = b.stance_for(ball, "right") - KickParams().standoff * b.aim
+    b._approach(Snapshot(0.0, pre - 0.3 * b.aim, 0.0, ball, 0.0, False, False))
+    assert b._orbit_dir == 0.0 and len(b.plan) == 3
+
+
 @pytest.mark.parametrize("foot", ["left", "right"])
 def test_picks_the_foot_whose_stance_is_nearer(foot):
     b = KickBrain(KickParams(), ["left", "right"])
@@ -267,3 +300,39 @@ def test_falls_go_to_recover_and_back():
     s.fallen, s.t = False, 3.0
     brain.update(s)
     assert brain.state == "APPROACH" and "back up" in brain.last_change
+
+
+# -- kickback --------------------------------------------------------------------
+
+ENDS = ((-0.5, 0.0), (0.5, 0.0))
+
+
+@pytest.mark.parametrize("duck_x, first", [(-0.45, +1.0), (0.45, -1.0)])
+def test_kickback_first_kick_goes_away_from_the_duck(duck_x, first):
+    b = KickbackBrain(KickParams(), ["right"], ENDS)
+    b.pick_aim(snap_at((duck_x, 0.0), (0.0, 0.0)))
+    assert b.aim == pytest.approx([first, 0.0]) and b.aim_mode == "line"
+
+
+@pytest.mark.parametrize("ball", [(0.7, 0.2), (0.1, 0.2)])
+def test_kickback_kicks_back_towards_the_line_whatever_the_roll(ball):
+    # The last kick went +x. Whether the ball rolled past the right end or stopped
+    # short of it (and drifted off the line), the next kick goes back to the left end.
+    b = KickbackBrain(KickParams(), ["right"], ENDS)
+    b.events["kicks"].append({"aim": [1.0, 0.0]})
+    b.pick_aim(snap_at((0.0, 0.0), ball))
+    d = np.array([-0.5, 0.0]) - np.array(ball)
+    assert b.aim == pytest.approx(d / np.linalg.norm(d))
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_kickback_goes_back_and_forth_along_the_line(lazy):
+    w = IdealWorld(duck_xy=(-0.45, 0.0), kick_noise=0.05, lazy=lazy)
+    brain = KickbackBrain(KickParams(), ["left", "right"], ENDS)
+    for _ in range(int((200 if lazy else 100) / DT)):
+        w.apply(brain.update(w.snap()), brain)
+    kicks = brain.events["kicks"]
+    assert len(kicks) >= 4, brain.events
+    signs = [np.sign(k["aim"][0]) for k in kicks]
+    assert all(a != b for a, b in zip(signs, signs[1:])), signs      # alternates
+    assert all(abs(k["end_xy"][1]) < 0.3 for k in finished(brain))   # stays near the line

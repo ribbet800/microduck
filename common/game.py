@@ -3,7 +3,8 @@
 A new game is a subclass of `Game` with a brain (common/brain.py) plus:
     start()          put the duck and ball where they begin
     rules(s)         optional: game rules each step (e.g. "reached the ball: new ball")
-    draw(scn)        optional: extra 3D markers (call super().draw(scn) first)
+    draw(scn)        optional: extra 3D markers (call super().draw(scn) first),
+                     with `legend` saying what they mean (colours: common/overlay.py)
     status()         optional: extra rows for the viewer panel (super().status() + yours)
     log_row()        optional: extra log.csv columns ({**super().log_row(), ...})
     summary()        dict saved as summary.json ({**super().summary(), ...})
@@ -11,7 +12,8 @@ A new game is a subclass of `Game` with a brain (common/brain.py) plus:
 
 This class does the plumbing: noticing falls (with hysteresis), building the
 Snapshot, carrying out the Action on the duck, stepping, logging every step,
-trails, and the bits of drawing / status / summary every game has.
+trails, and the bits of drawing / status / summary every game has (the
+brain's plan, the command vs what the duck actually does).
 `sim.run_live` / `sim.run_headless` drive it.
 """
 
@@ -25,8 +27,12 @@ from common.brain import Snapshot
 
 class Game:
     camera = {"track": True, "distance": 2.4, "elevation": -45, "azimuth": 135}
-    state_colours: dict = {}     # command arrow colour per brain state (default blue)
-    trail_len = 200              # dots kept in each trail (one every 0.1 s)
+    trail_len = 200              # points kept in each trail (one every 0.1 s)
+    ball_roll = 1.0              # how far a typical kick rolls (m): sim.run sets it from --ball-roll
+    # What the markers mean, shown in the live viewer (a game adds rows for what its draw() adds).
+    legend = [("pink", "the command: where it would take the duck in 2 s"),
+              ("white", "where the duck is actually going (2 s), and has been"),
+              ("cyan", "the brain's plan: the route it means to walk")]
 
     def __init__(self, duck: sim.Duck, brain):
         self.duck, self.brain = duck, brain
@@ -39,6 +45,7 @@ class Game:
         self.events = {"falls": [], **brain.events}
         self.log: dict[str, list] = {}
         self._vf = self._wz = 0.0
+        self._xy = None
 
     # -- to fill in --------------------------------------------------------------
     def start(self):
@@ -94,11 +101,13 @@ class Game:
         a = sim.CONTROL_DT / 0.5
         self._vf += a * (vf - self._vf)
         self._wz += a * (wz - self._wz)
+        # The trunk sways a couple of cm sideways every step; smooth that out of its trail.
+        self._xy = self.duck.xy if self._xy is None else self._xy + sim.CONTROL_DT / 0.25 * (self.duck.xy - self._xy)
 
         for k, v in self.log_row().items():
             self.log.setdefault(k, []).append(v)
         if int(round(self.t / sim.CONTROL_DT)) % 5 == 0:
-            x, y = self.duck.xy
+            x, y = self._xy
             bx, by, _ = self.duck.ball
             self.duck_trail = (self.duck_trail + [(float(x), float(y))])[-self.trail_len:]
             self.ball_trail = (self.ball_trail + [(float(bx), float(by))])[-self.trail_len:]
@@ -117,8 +126,14 @@ class Game:
 
     def draw(self, scn):
         d = self.duck
-        overlay.command_arrow(scn, d.xy, d.yaw, self.cmd, self.state_colours.get(self.brain.state, overlay.BLUE))
-        overlay.trail(scn, self.duck_trail)
+        if len(self.brain.plan) > 1:
+            overlay.route(scn, self.brain.plan)
+        overlay.trail(scn, self.duck_trail, overlay.WHITE)
+        # Asked for vs actually doing, on the same scale (where each takes the
+        # duck in the next 2 s), so they overlap when the legs keep up.
+        vx, vy, wz = (float(c) for c in self.cmd)
+        overlay.motion(scn, d.xy, d.yaw, vx, vy, wz, overlay.PINK, overlay.Z_CMD)
+        overlay.motion(scn, d.xy, d.yaw, self._vf, 0.0, self._wz, overlay.WHITE, overlay.Z_MOTION)
 
     def status(self):
         return [("time", f"{self.t:.1f} s"),

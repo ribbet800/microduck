@@ -41,8 +41,6 @@ import kick_plots  # noqa: E402
 class KickLoop(Game):
     """The brain does nearly everything here; the game draws it and keeps score."""
 
-    state_colours = {"APPROACH": overlay.BLUE, "ALIGN": overlay.YELLOW, "SETTLE": overlay.YELLOW,
-                     "KICK": overlay.RED, "WATCH": overlay.WHITE, "RECOVER": overlay.RED}
     trail_len = 150
 
     def __init__(self, duck: sim.Duck, brain: KickBrain, follow: bool):
@@ -62,31 +60,31 @@ class KickLoop(Game):
                 "heading_err": b.heading_err if lined_up else float("nan")}
 
     # -- drawing ------------------------------------------------------------------
+    # The area's row comes last: a game that overrides draw_area swaps it.
+    legend = Game.legend + [("yellow", "where the next kick should send the ball (orange: home), ball trail"),
+                            ("red / green", "kick spot in front of the foot: green = ball on it"),
+                            ("faint circle", "soft arena: outside it, kicks aim back home")]
+
     def draw(self, scn):
         super().draw(scn)
         d, b, p = self.duck, self.brain, self.brain.p
-        # The soft arena: outside this circle, kicks aim back towards the middle.
-        n = 48
-        for i in range(n):
-            a0, a1 = 2 * math.pi * i / n, 2 * math.pi * (i + 1) / n
-            overlay.line(scn, (p.arena_radius * math.cos(a0), p.arena_radius * math.sin(a0)),
-                         (p.arena_radius * math.cos(a1), p.arena_radius * math.sin(a1)),
-                         (1, 1, 1, 0.3), width=2.0, z=0.003)
-        ball = d.ball[:2]
-        # Where it's aiming the next kick.
+        self.draw_area(scn)
+        overlay.trail(scn, self.ball_trail, overlay.YELLOW)
+        # Where the next kick should send the ball, from where it was aimed (so
+        # after a kick the ball's trail can be compared with it), about as far
+        # as a kick rolls.
         if b.aim is not None:
-            colour = (1.0, 0.55, 0.0, 0.7) if b.aim_mode == "home" else (1.0, 0.85, 0.1, 0.7)
-            overlay.line(scn, ball, ball + 0.6 * b.aim, colour, width=2.0)
-            # Where it's walking to right now, and the kick stance (ghost marker + facing arrow).
-            if b.state == "APPROACH":
-                overlay.sphere(scn, (b.target[0], b.target[1], 0.01), 0.012, overlay.BLUE)
-            overlay.sphere(scn, (b.stance[0], b.stance[1], 0.01), 0.01, (1, 1, 1, 0.7))
-            overlay.arrow(scn, b.stance, b.stance + 0.12 * b.aim, (1, 1, 1, 0.5), width=0.005, z=0.01)
+            start = b.aim_from + 0.04 * b.aim                        # from the ball's edge
+            overlay.arrow(scn, [start, b.aim_from + self.ball_roll * b.aim],
+                          overlay.ORANGE if b.aim_mode == "home" else overlay.YELLOW, width=4.0, z=overlay.Z_AIM)
         # The kick spot in front of the duck's foot: green when the ball is on it.
         spot = b.spot_world(d.xy, d.yaw)
-        on_spot = np.linalg.norm(spot - ball) < p.tolerance
-        overlay.disc(scn, spot, p.tolerance, (0.2, 0.95, 0.3, 0.6) if on_spot else (1.0, 0.3, 0.2, 0.45), z=0.004)
-        overlay.trail(scn, self.ball_trail, (1.0, 0.55, 0.0, 0.7), radius=0.005)
+        on_spot = np.linalg.norm(spot - d.ball[:2]) < p.tolerance
+        overlay.disc(scn, spot, p.tolerance, overlay.GREEN if on_spot else overlay.RED)
+
+    def draw_area(self, scn):
+        """The soft arena: outside this circle, kicks aim back towards the middle."""
+        overlay.circle(scn, (0.0, 0.0), self.brain.p.arena_radius)
 
     def status(self):
         b = self.brain
@@ -126,28 +124,26 @@ class KickLoop(Game):
 
     def plots(self, out_dir):
         p = self.brain.p
-        kick_plots.topdown(self.log, self.events, p, str(out_dir / "topdown.png"))
+        kick_plots.topdown(self.log, self.events, p, str(out_dir / "topdown.png"),
+                           line=getattr(self.brain, "ends", None))
         kick_plots.alignment(self.events, p, str(out_dir / "alignment.png"))
         kick_plots.aiming(self.events, str(out_dir / "aiming.png"))
         kick_plots.timeline(self.log, self.events, p, str(out_dir / "timeline.png"))
         return ["topdown.png", "alignment.png", "aiming.png", "timeline.png"]
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sim.add_common_args(ap)
+def add_kick_args(ap):
+    """Options every kick game shares (on top of sim.add_common_args)."""
     ap.add_argument("--kick-left", type=str, default=None, help="left-foot kick policy ONNX (default: from the Hub)")
     ap.add_argument("--kick-right", type=str, default=None, help="right-foot kick policy ONNX (default: from the Hub)")
     ap.add_argument("--feet", choices=["both", "left", "right"], default="both")
     ap.add_argument("--assist", action="store_true", help="nudge the ball onto the kick spot when close")
     ap.add_argument("--tolerance", type=float, default=KickParams.tolerance, help="line-up tolerance (m)")
-    ap.add_argument("--aim-spread", type=float, default=math.degrees(KickParams.aim_spread),
-                    help="random aim: up to this many degrees either side of the duck->ball direction")
-    ap.add_argument("--arena", type=float, default=KickParams.arena_radius,
-                    help="soft arena radius (m): outside it, kicks aim back towards the middle")
-    ap.add_argument("--follow", action="store_true", help="camera follows the duck instead of showing the arena")
-    args = ap.parse_args()
+    ap.add_argument("--follow", action="store_true", help="camera follows the duck instead of showing the whole area")
 
+
+def make_kick_duck(args):
+    """The duck with the walking policy plus the kick policies for `--feet`. Returns (duck, feet)."""
     train_hint = ("or train one in microduck_rl: `uv run train Mjlab-BallKick-Flat-MicroDuck` "
                   "(KICK_FOOT at the top of microduck_ball_kick_env_cfg.py picks the foot), "
                   "then export it, and pass --kick-right / --kick-left")
@@ -157,8 +153,20 @@ def main():
         given = getattr(args, f"kick_{foot}")
         paths[foot] = given or sim.hub_policy(["kick", foot], f"{foot}-foot kick", args.policy_revision,
                                               exact=f"ball_kick_{foot}.onnx", how_to_train=train_hint)
+    return sim.make_duck(args, kick_left=paths.get("left"), kick_right=paths.get("right")), feet
 
-    duck = sim.make_duck(args, kick_left=paths.get("left"), kick_right=paths.get("right"))
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sim.add_common_args(ap)
+    add_kick_args(ap)
+    ap.add_argument("--aim-spread", type=float, default=math.degrees(KickParams.aim_spread),
+                    help="random aim: up to this many degrees either side of the duck->ball direction")
+    ap.add_argument("--arena", type=float, default=KickParams.arena_radius,
+                    help="soft arena radius (m): outside it, kicks aim back towards the middle")
+    args = ap.parse_args()
+
+    duck, feet = make_kick_duck(args)
     params = KickParams(assist=args.assist, tolerance=args.tolerance,
                         aim_spread=math.radians(args.aim_spread), arena_radius=args.arena)
     brain = KickBrain(params, feet, rng=np.random.default_rng(args.seed))
