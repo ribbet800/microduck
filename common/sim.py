@@ -83,7 +83,7 @@ def hub_policy(name: str, what: str, revision: str | None = None, how_to_train: 
 def walking_policy(path: str | None, revision: str | None) -> str:
     return path or hub_policy(
         "velstand.onnx", "walking", revision,
-        how_to_train=("velstand.onnx (walks AND gets up after falls) is best; alpha_walking.onnx also works. "
+        how_to_train=("velstand.onnx (walks AND gets up after falls). "
                       "Or train your own in microduck_rl: `uv run train Mjlab-VelStand-Flat-MicroDuck`, "
                       "then `uv run scripts/export.py ...`."))
 
@@ -123,10 +123,10 @@ def build_sim(ip, rl_repo: Path, walking_path: str, use_bam: bool = True,
     set_ball_roll(model, ball_roll)
 
     obs_dim = ort.InferenceSession(walking_path).get_inputs()[0].shape[-1]
-    if (kick_left or kick_right) and obs_dim != 61:
-        sys.exit(f"Kick policies need a 61-D walking policy to hand back to; this one takes {obs_dim} inputs.")
+    if obs_dim != 61:
+        sys.exit(f"Need a walking policy with the 61-D observation (like velstand.onnx); this one takes {obs_dim} inputs.")
     policy = ip.PolicyInference(model, data, walking_onnx_path=walking_path, bam_ctrl=bam_ctrl,
-                                new_cmd_obs=(obs_dim == 61), use_projected_gravity=True,
+                                new_cmd_obs=True, use_projected_gravity=True,
                                 kick_left_onnx_path=kick_left, kick_right_onnx_path=kick_right,
                                 kick_duration=kick_duration)
     return model, data, bam_ctrl, policy
@@ -290,7 +290,6 @@ def run_live(duck: Duck, game, speed: float = 1.0):
 
     frame_dt = 1 / 60          # draw at most this often
     owed = 0.0                 # sim time behind where `speed` says it should be
-    achieved = speed           # sim seconds per wall second, smoothed over ~1 s
     with mujoco.viewer.launch_passive(duck.model, duck.data, key_callback=on_key,
                                       show_left_ui=False, show_right_ui=False) as viewer:
         _apply_camera(viewer.cam, game.camera, duck.trunk_id)
@@ -298,7 +297,6 @@ def run_live(duck: Duck, game, speed: float = 1.0):
         while viewer.is_running():
             t0 = time.perf_counter()
             wall, last = t0 - last, t0
-            sim_t0 = game.t
             with viewer.lock():
                 if ctl["paused"]:
                     owed = 0.0
@@ -316,11 +314,7 @@ def run_live(duck: Duck, game, speed: float = 1.0):
                     owed = min(owed, CONTROL_DT)
                 viewer.user_scn.ngeom = 0
                 game.draw(viewer.user_scn)
-            if not ctl["paused"] and wall > 0:
-                a = min(wall, 1.0)
-                achieved += a * ((game.t - sim_t0) / wall - achieved)
-            shown = f"{ctl['speed']:g}x" + (f" ({achieved:.1f}x actual)" if abs(achieved / ctl["speed"] - 1) > 0.1 else "")
-            rows = game.status() + [("speed", "paused" if ctl["paused"] else shown), ("keys", KEYS_HINT)]
+            rows = game.status() + [("speed", "paused" if ctl["paused"] else f"{ctl['speed']:g}x"), ("keys", KEYS_HINT)]
             legend = game.legend
             viewer.set_texts([(None, mujoco.mjtGridPos.mjGRID_TOPLEFT,
                                _panel("\n".join(r[0] for r in rows)), _panel("\n".join(r[1] for r in rows))),

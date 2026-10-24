@@ -66,8 +66,7 @@ walks at about 30% of the commanded speed.
 
 Keys: **space** pauses / resumes, **right arrow** steps one 50 Hz tick (and
 pauses), **-** / **+** halve / double the playback speed. `--speed 4` starts
-it at 4x (0.125-16x). The panel shows the speed asked for and, if the computer
-can't keep up, the speed it's actually managing (`4x (2.7x actual)`).
+it at 4x (0.125-16x). If the computer can't keep up, it runs as fast as it can.
 
 Mess with it: double-click the ball to select it, then **Ctrl + right-drag** to shove it.
 
