@@ -87,7 +87,6 @@ Saves to `runs/chase_<time>/`:
 
 - Tune the brain: `--turn-gain 2.5` (more aggressive), or edit `common/steer.py`. Keep forward ≤ 0.4 m/s and turn ≤ 1.0 rad/s, the ranges the walking policy was trained on.
   The walking policy has a big **dead zone**: from a stand it ignores forward commands below ~0.25 m/s and turns below ~0.7 rad/s, never sidesteps or walks backwards, and walks at only ~30% of the commanded speed. So the brains never send less than `--min-forward` (0.3); set it to 0 to see the duck freeze near the ball.
-- `--no-bam` swaps Pollen's realistic servo model for ideal PD servos. Compare how much worse/better it gets.
 - `uv run pytest` checks the brain against imaginary legs, both perfect ones and ones with the real policy's dead zone (if it can't catch the ball with those, it won't with real ones).
 
 ## Kick loop: walk up, kick, follow, kick again

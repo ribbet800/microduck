@@ -107,19 +107,13 @@ def set_ball_roll(model, metres: float):
     model.geom_friction[g, 2] = float(np.exp(np.interp(np.log(metres), dist[::-1], mu[::-1])))
 
 
-def build_sim(ip, rl_repo: Path, walking_path: str, use_bam: bool = True,
+def build_sim(ip, rl_repo: Path, walking_path: str,
               kick_left: str | None = None, kick_right: str | None = None, kick_duration: float = 3.0,
               ball_roll: float = 1.0):
-    """Load the duck + ball scene and Pollen's PolicyInference runner."""
+    """Load the duck + ball scene (with Pollen's BAM servo model) and their PolicyInference runner."""
     xml = str(rl_repo / ip.MICRODUCK_BALL_XML)   # groundcontact duck + 70 mm / 15 g ball
-    bam_ctrl = None
-    if use_bam:
-        bam_model = ip.load_bam_model(ip.BAM_KP_FW, 7.4, 0.0)
-        model, data, bam_ctrl, _ = ip.load_mujoco_with_bam(xml, bam_model, 0.005, 0.1, ip.BAM_VIN_MIN)
-    else:
-        model = mujoco.MjModel.from_xml_path(xml)
-        model.opt.timestep = 0.005
-        data = mujoco.MjData(model)
+    bam_model = ip.load_bam_model(ip.BAM_KP_FW, 7.4, 0.0)
+    model, data, bam_ctrl, _ = ip.load_mujoco_with_bam(xml, bam_model, 0.005, 0.1, ip.BAM_VIN_MIN)
     set_ball_roll(model, ball_roll)
 
     obs_dim = ort.InferenceSession(walking_path).get_inputs()[0].shape[-1]
@@ -164,8 +158,7 @@ class Duck:
         for i, qi in enumerate(p.joint_qpos_indices):
             d.qpos[qi] = p.default_pose[i]
         d.qpos[self.ball_q:self.ball_q + 7] = [xy[0] + 5.0, xy[1], 0.035, 1, 0, 0, 0]   # out of the way
-        if self.bam_ctrl is not None:
-            self.bam_ctrl.reset(d.qpos)
+        self.bam_ctrl.reset(d.qpos)
         p.set_position_targets(p.default_pose)
         p.last_action[:] = 0.0
         mujoco.mj_forward(self.model, d)
@@ -236,8 +229,7 @@ class Duck:
         p.apply_action(p.infer())
         p.update_behavior(CONTROL_DT)
         for _ in range(DECIMATION):
-            if self.bam_ctrl is not None:
-                self.bam_ctrl.update()
+            self.bam_ctrl.update()
             mujoco.mj_step(self.model, self.data)
 
 
@@ -397,7 +389,6 @@ def add_common_args(ap):
                     help=f"walking policy ONNX (default: download velstand.onnx from {POLICY_REPO})")
     ap.add_argument("--policy-revision", type=str, default=None, help="Hub revision/tag, e.g. v8")
     ap.add_argument("--rl-repo", type=str, default=None, help="path to a microduck_rl checkout")
-    ap.add_argument("--no-bam", action="store_true", help="simple PD servos instead of the BAM model")
     ap.add_argument("--ball-roll", type=float, default=1.0,
                     help="how far a typical kick rolls (m, 0.13-5); 0 = Pollen's ball, which never slows down")
     ap.add_argument("--seed", type=int, default=0)
@@ -412,8 +403,7 @@ def make_duck(args, kick_left: str | None = None, kick_right: str | None = None)
     rl_repo = find_rl_repo(args.rl_repo)
     ip = import_infer_policy(rl_repo)
     walk = walking_policy(args.policy, args.policy_revision)
-    model, data, bam_ctrl, policy = build_sim(ip, rl_repo, walk, use_bam=not args.no_bam,
-                                              kick_left=kick_left, kick_right=kick_right, ball_roll=args.ball_roll)
+    model, data, bam_ctrl, policy = build_sim(ip, rl_repo, walk, kick_left=kick_left, kick_right=kick_right, ball_roll=args.ball_roll)
     return Duck(model, data, bam_ctrl, policy)
 
 

@@ -39,7 +39,7 @@ The brains are written around these numbers; `tests/legs.py:lazy_legs` models th
 | 0.25 m/s pulses of 0.1–0.4 s | 0 mm: too short to start a gait |
 | stopping from walking | coasts ~4 mm back, 7–11 mm sideways |
 
-Same picture with `--no-bam`, so it's the policy, not the servo model.
+Same picture with ideal PD servos instead of BAM (the old `--no-bam` option, since removed), so it's the policy, not the servo model.
 
 ### Facts worth knowing (checked in Pollen's code, `microduck_rl` @ b02fdea, 2026-10-12)
 
@@ -58,8 +58,8 @@ Same picture with `--no-bam`, so it's the policy, not the servo model.
   `condim=3`, which ignores it: a kicked ball never slows down (24 m in 40 s at 0.6 m/s).
   `common/sim.py:set_ball_roll` turns on `condim=6` and picks the coefficient from a measured
   table so a typical kick rolls `--ball-roll` metres (default 1). Kicks leave at ~0.5–0.7 m/s.
-- **Servos:** BAM M6 XL330 model (voltage control, load-dependent friction). `--no-bam` swaps
-  in ideal PD servos for comparison. Pollen's docs: actuator fidelity is most of the sim2real gap.
+- **Servos:** BAM M6 XL330 model (voltage control, load-dependent friction), always on.
+  Pollen's docs: actuator fidelity is most of the sim2real gap.
 - **CPU speed** on Jack's laptop (one env, BAM on): ~6–7× real time headless (several runs at
   once still fine), ~0.8× with `--video`, ~1× in the live viewer.
 - Pollen's `AGENTS.md` (in `third_party/microduck_rl`) is required reading before training
