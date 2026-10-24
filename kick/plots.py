@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Circle, Rectangle
 
-from brain import WHIFF_SPEED
+from kick.brain import WHIFF_SPEED
 
 STATE_ORDER = ["APPROACH", "ALIGN", "SETTLE", "KICK", "WATCH", "RECOVER"]
 STATE_COLOURS = {"APPROACH": "#4C78A8", "ALIGN": "#F2CF5B", "SETTLE": "#E8A33D",

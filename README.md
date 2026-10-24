@@ -14,8 +14,8 @@ vs Pollen's pre-trained policies, see **[docs/how_it_works.md](docs/how_it_works
 Pollen's trained walking policy is the **legs**: it turns a velocity command
 (forward speed, turn rate) into motor movements. `fetch/chaser.py` is the
 **brain**: it looks at where the ball is relative to the duck and decides which
-command to send (the steering itself is `common/steer.py`). No training needed. When the duck reaches the ball, the ball
-jumps somewhere new and the chase starts again.
+command to send (the steering itself is `common/steer.py`). No training needed.
+When the duck reaches the ball, the ball jumps somewhere new and the chase starts again.
 
 ```
 ball position ──► chaser.py (brain) ──► [vx, vy, turn] ──► Pollen's policy (legs) ──► 14 servos
@@ -30,8 +30,12 @@ Needs [uv](https://docs.astral.sh/uv/). No GPU needed: this only *runs* a policy
 ```bash
 git clone https://github.com/ribbet800/microduck && cd microduck
 git clone https://github.com/pollen-robotics/microduck_rl third_party/microduck_rl
+git -C third_party/microduck_rl checkout b02fdea   # the version this code was checked against
 uv sync
 ```
+
+The pin matters: `common/sim.py` drives some of Pollen's internals directly (to
+start a kick without teleporting the ball), which a newer microduck_rl may change.
 
 The walking policy (`velstand.onnx`: walks, stands still at zero command, and
 gets back up after a fall) downloads from
@@ -90,14 +94,11 @@ Saves to `runs/chase_<time>/`:
 ## Kick loop: walk up, kick, follow, kick again
 
 A separate game. Each time the ball stops, the duck picks a **random direction**
-to kick it (±60° around a base direction). The base direction is "onwards" (the
-duck→ball direction) near the middle and leans more and more back towards the
-middle the further out the ball is, until it points straight home at the edge
-of a 1.5 m **soft arena**. It gets behind the ball
-(orbiting round it at a safe distance when the ball is in the way, so it arrives
-facing the right way), walks in along the line steering like a car
-until the ball sits exactly in front of one foot, stands still, then swaps in
-Pollen's **kick policy**. Then it follows the ball and does it again.
+to kick it, leaning back towards the middle the further out the ball is, inside
+a **soft arena**. It gets behind the ball (orbiting round it when the ball is in
+the way), walks in along the line until the ball sits exactly in front of one
+foot, stands still, then swaps in Pollen's **kick policy**. Then it follows the
+ball and does it again. How each step works: [docs/how_it_works.md](docs/how_it_works.md).
 
 ```bash
 uv run kick/kick_loop.py                                  # watch live (macOS: uv run mjpython ...)
@@ -108,8 +109,7 @@ The kick policy is **blind**: it never sees the ball, kicks straight ahead, and
 was trained with the ball 9 cm ahead and 4.2 cm to the side of the trunk
 (±1.5 cm). So the kick's direction is just which way the duck faces, and lining
 up is the whole game. The brain (`kick/brain.py`) is a state machine:
-APPROACH → ALIGN → SETTLE → KICK → WATCH (+ RECOVER after falls), drawn with
-every transition in [docs/how_it_works.md](docs/how_it_works.md). The viewer's
+APPROACH → ALIGN → SETTLE → KICK → WATCH (+ RECOVER after falls). The viewer's
 top-left panel shows the current state and why it last changed.
 
 On top of the markers every game has (plan, command, actual motion: see
@@ -128,20 +128,18 @@ whether a sloppier line-up sends it further off course), `alignment.png` (where
 the ball was at each kick, drawn over the feet) and `timeline.png` (what the
 brain was doing, line-up error, ball speed).
 
-Options: `--aim-spread 30` makes the random aims tamer, `--arena 1.0` a smaller
-arena, `--centre-bias 0.5` a weaker pull back to the middle (0 = always onwards;
-the default 1 keeps the ball outside the arena 5% of the time instead of 36%, at
-~12% fewer kicks a minute), `--ball-roll 2` lets a kick roll ~2 m instead of ~1 m (Pollen's own ball
-setting, `--ball-roll 0`, never slows down at all), `--seed` picks a different
-(repeatable) sequence of aims, `--assist`
-nudges the ball onto the spot when the duck gets close (Pollen's own demo always
-does this), `--feet right` uses one foot only, `--tolerance 0.02` makes it less
-fussy, `--follow` makes the camera follow the duck.
+Options (`--help` lists them all):
+
+- `--aim-spread 30`: tamer random aims; `--centre-bias 0.5`: a weaker pull back to the middle (0 = always onwards); `--arena 1.0`: a smaller arena
+- `--ball-roll 2`: kicks roll ~2 m instead of ~1 m (`0` is Pollen's own ball, which never slows down)
+- `--seed 3`: a different, repeatable sequence of aims
+- `--assist`: nudge the ball onto the spot when the duck gets close (Pollen's own demo always does this)
+- `--feet right`: one foot only; `--tolerance 0.02`: less fussy line-up; `--follow`: the camera follows the duck
 
 ### Kickback: back and forth on a line
 
 The same brain, kicking the ball back the way it last went, between the ends of
-a 1 m line (a ball that drifts off the line is steered back to it). Every kick
+a line (a ball that drifts off the line is steered back to it). Every kick
 means getting round the ball, so this is the orbit's showcase.
 
 ```bash
@@ -150,9 +148,9 @@ uv run kick/kickback.py --headless --duration 180 --video
 ```
 
 The faint white line with a disc at each end is the line; the rest of the
-markers are the kick loop's. `--length 1.5` makes the line longer (about one kick's roll, `--ball-roll`, works
-best); the kick loop's other options apply too. `summary.json` adds
-`mean_off_line_m`: how far from the line the kicks leave the ball.
+markers are the kick loop's. `--length 1.5` makes the line longer (about one
+kick's roll works best); the kick loop's other options apply too.
+`summary.json` adds `mean_off_line_m`: how far from the line the kicks leave the ball.
 
 ## Roadmap
 
@@ -187,7 +185,7 @@ kick/
 ├── kickback.py     # the same game kicking back and forth along a line
 ├── brain.py        # its brain: approach (with orbit) / align / settle / kick / watch / recover,
 │                   #   and KickbackBrain (a different pick_aim)
-└── kick_plots.py
+└── plots.py
 docs/               # how_it_works.md: diagrams of the loop and both brains
 tests/              # brains checked against imaginary legs (uv run pytest)
 plans.md            # roadmap + hand-over notes

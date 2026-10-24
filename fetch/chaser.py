@@ -5,8 +5,7 @@
 
 Reaching the ball, respawning it and giving up are game rules, not the
 brain's business (fetch/chase_ball.py). Stage 1 swaps this for a small trained
-policy: any object with the same `update(snapshot) -> Action` / `state` /
-`last_change` works (see common/brain.py).
+policy: any brain with the common/brain.py interface fits.
 """
 
 from __future__ import annotations
@@ -32,4 +31,4 @@ class ChaseBrain(Brain):
             self.set_state("CHASE", s.t, "back up")
         self.plan = [np.array(s.duck_xy, float), np.array(s.ball_xy, float)]
         cmd, _, _ = steer_to(to_duck_frame(s.duck_xy, s.duck_yaw, s.ball_xy), self.p)
-        return Action(cmd=np.asarray(cmd, dtype=np.float32))
+        return Action(cmd=cmd)

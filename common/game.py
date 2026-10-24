@@ -19,6 +19,8 @@ brain's plan, the command vs what the duck actually does).
 
 from __future__ import annotations
 
+from collections import deque
+
 import numpy as np
 
 from common import overlay, sim
@@ -28,7 +30,6 @@ from common.brain import Snapshot
 class Game:
     camera = {"track": True, "distance": 2.4, "elevation": -45, "azimuth": 135}
     trail_len = 200              # points kept in each trail (one every 0.1 s)
-    ball_roll = 1.0              # how far a typical kick rolls (m): sim.run sets it from --ball-roll
     # What the markers mean, shown in the live viewer (a game adds rows for what its draw() adds).
     legend = [("pink", "the command: where it would take the duck in 2 s"),
               ("white", "where the duck is actually going (2 s), and has been"),
@@ -39,8 +40,8 @@ class Game:
         self.t = 0.0
         self.fallen = False
         self.cmd = np.zeros(3, dtype=np.float32)
-        self.duck_trail: list[tuple[float, float]] = []
-        self.ball_trail: list[tuple[float, float]] = []
+        self.duck_trail: deque[tuple[float, float]] = deque(maxlen=self.trail_len)
+        self.ball_trail: deque[tuple[float, float]] = deque(maxlen=self.trail_len)
         # The brain's own event lists are shared, not copied, so they fill up here too.
         self.events = {"falls": [], **brain.events}
         self.log: dict[str, list] = {}
@@ -109,8 +110,8 @@ class Game:
         if int(round(self.t / sim.CONTROL_DT)) % 5 == 0:
             x, y = self._xy
             bx, by, _ = self.duck.ball
-            self.duck_trail = (self.duck_trail + [(float(x), float(y))])[-self.trail_len:]
-            self.ball_trail = (self.ball_trail + [(float(bx), float(by))])[-self.trail_len:]
+            self.duck_trail.append((float(x), float(y)))
+            self.ball_trail.append((float(bx), float(by)))
 
     # -- what every game shows and saves ----------------------------------------
     def log_row(self) -> dict:

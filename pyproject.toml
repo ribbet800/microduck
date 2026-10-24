@@ -23,6 +23,7 @@ dev = ["pytest"]
 [tool.pytest.ini_options]
 # Only our tests: third_party/microduck_rl has its own, which need its GPU stack.
 testpaths = ["tests"]
+pythonpath = ["."]       # tests import the packages (common, fetch, kick, tests) from the repo root
 
 [tool.uv]
 package = false

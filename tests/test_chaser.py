@@ -7,19 +7,15 @@ a fraction of a second, no MuJoCo needed.
 """
 
 import math
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(REPO), str(REPO / "fetch"), str(REPO / "tests")]
-from chaser import ChaseBrain  # noqa: E402
-from common.brain import Snapshot  # noqa: E402
-from common.sim import yaw_from_quat  # noqa: E402
-from common.steer import SteerParams, from_duck_frame, steer_to, to_duck_frame  # noqa: E402
-from legs import lazy_legs  # noqa: E402
+from common.brain import Snapshot
+from common.sim import yaw_from_quat
+from common.steer import SteerParams, from_duck_frame, steer_to, to_duck_frame
+from fetch.chaser import ChaseBrain
+from tests.legs import lazy_legs
 
 
 def simulate(ball, yaw0=0.0, seconds=30.0, dt=0.02, p=SteerParams(), lazy=False):

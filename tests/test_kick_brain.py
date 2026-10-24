@@ -10,17 +10,14 @@ tests/legs.py): a big dead zone, no sidestep, no walking backwards, ~30% speed.
 """
 
 import math
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(REPO), str(REPO / "kick"), str(REPO / "tests")]
-from brain import KickbackBrain, KickBrain, KickParams  # noqa: E402
-from common.brain import Snapshot  # noqa: E402
-from legs import lazy_legs  # noqa: E402
+from common.brain import Snapshot
+from common.steer import to_duck_frame
+from kick.brain import KickbackBrain, KickBrain, KickParams
+from tests.legs import lazy_legs
 
 DT = 0.02
 
@@ -48,11 +45,8 @@ class IdealWorld:
             self.ball = np.array(act.place_ball, float)
             self.ball_v[:] = 0
         if act.kick:
-            rel_spot = brain.spot_rel(act.kick)
-            c, s = math.cos(self.yaw), math.sin(self.yaw)
-            d = self.ball - self.duck
-            rel = np.array([c * d[0] + s * d[1], -s * d[0] + c * d[1]])
-            if np.linalg.norm(rel - rel_spot) < 0.02:     # foot connects
+            rel = to_duck_frame(self.duck, self.yaw, self.ball)
+            if np.linalg.norm(rel - brain.spot_rel(act.kick)) < 0.02:     # foot connects
                 ang = self.yaw + self.rng.normal(0, self.kick_noise)
                 self.ball_v = 1.0 * np.array([math.cos(ang), math.sin(ang)])
             self.kick_left_s = 3.0
@@ -143,9 +137,7 @@ def test_stance_puts_ball_on_the_spot():
     b.pick_aim(snap_at((0.0, 0.0), ball))
     for foot in ("right", "left"):
         stance, a = b.stance_for(ball, foot), b.aim
-        yaw = math.atan2(a[1], a[0])
-        d = ball - stance
-        rel = [math.cos(yaw) * d[0] + math.sin(yaw) * d[1], -math.sin(yaw) * d[0] + math.cos(yaw) * d[1]]
+        rel = to_duck_frame(stance, math.atan2(a[1], a[0]), ball)
         assert rel == pytest.approx(b.spot_rel(foot), abs=1e-9)
 
 

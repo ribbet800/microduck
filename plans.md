@@ -222,7 +222,7 @@ A `Brain` subclass (common/brain.py) in a `Game` (common/game.py), with an ideal
 common/   sim.py (setup, Duck, set_ball_roll, run_live/run_headless, save_outputs),
           game.py (shared loop), brain.py (Snapshot, Action, Brain), steer.py, overlay.py
 fetch/    chase_ball.py (game rules), chaser.py (ChaseBrain), plots.py
-kick/     kick_loop.py (game), brain.py (KickBrain state machine), kick_plots.py
+kick/     kick_loop.py (game), kickback.py, brain.py (KickBrain state machine), plots.py
 docs/     how_it_works.md (diagrams: 50 Hz loop, both brains, ours vs Pollen's)
 tests/    test_chaser.py, test_kick_brain.py, legs.py  (imaginary legs, no MuJoCo, ~10 s)
 third_party/microduck_rl   Pollen's repo, cloned by the user, gitignored
@@ -239,6 +239,10 @@ those, it won't with real ones.
 
 **Running**
 - `uv sync` once; `uv run <script>`; `uv run pytest`.
+- Imports are package imports from the repo root (`from kick.brain import ...`): each script
+  adds the root to `sys.path` once; pytest gets it from `pythonpath` in pyproject.toml.
+- microduck_rl is pinned to `b02fdea` (README): `common/sim.py:Duck.start_kick/step` use
+  PolicyInference internals (`_update_command`, `behavior_*`). Re-check them before moving it.
 - Python 3.12 only: BAM requires `<3.13`. MuJoCo is pinned to 3.10.0 and BAM to the commit
   microduck_rl pins (`62bd8ce`). Newer BAM changed the `MujocoController` signature.
 
@@ -250,8 +254,8 @@ those, it won't with real ones.
 - Pollen's `infer_policy.py` imports `termios`/`tty` (Unix-only). `common/sim.py`
   stubs them on Windows; they're only used by its keyboard reader.
 
-**Headless video on Linux** needs EGL: `sim.setup_gl_for_headless()` sets `MUJOCO_GL=egl`,
-and it must run before anything imports mujoco.
+**Headless video on Linux** needs EGL: `common/__init__.py` sets `MUJOCO_GL=egl` for
+`--headless` runs, before anything in `common` imports mujoco.
 
 ---
 

@@ -22,25 +22,21 @@ then Ctrl + right-drag to shove it around.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import sys
 from pathlib import Path
 
 import numpy as np
 
-HERE = Path(__file__).resolve().parent
-sys.path[:0] = [str(HERE), str(HERE.parent)]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # so `uv run fetch/chase_ball.py` finds the packages
 
-from common import sim  # noqa: E402
-
-sim.setup_gl_for_headless()   # must run before mujoco is imported
-
-from common import overlay  # noqa: E402
+from common import overlay, sim  # noqa: E402
 from common.brain import Snapshot  # noqa: E402
 from common.game import Game  # noqa: E402
 from common.steer import SteerParams, to_duck_frame  # noqa: E402
-from chaser import ChaseBrain  # noqa: E402
-import plots  # noqa: E402
+from fetch import plots  # noqa: E402
+from fetch.chaser import ChaseBrain  # noqa: E402
 
 
 class Chase(Game):
@@ -103,7 +99,7 @@ class Chase(Game):
                 "balls_reached": len(took),
                 "mean_time_to_reach_s": round(float(np.mean(took)), 2) if took else None,
                 "gave_up": len(self.events["timeouts"]),
-                "params": vars(self.brain.p) if hasattr(self.brain, "p") else {}}
+                "params": dataclasses.asdict(self.brain.p) if hasattr(self.brain, "p") else {}}
 
     def plots(self, out_dir):
         r = self.catch_radius

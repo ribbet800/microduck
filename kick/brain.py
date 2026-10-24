@@ -14,9 +14,9 @@ Each time the ball comes to rest, the brain picks a new random aim:
   - outside it: back towards the origin, give or take up to `home_spread`.
     A soft wall: the ball is never teleported.
 
-    APPROACH  get behind the ball on the aim line, facing along it: orbit the
-              ball at a safe distance if the straight way is blocked by it,
-              join the aim line a little further back, walk in along it
+    APPROACH  get behind the ball on the aim line, facing along it: if the
+              straight way passes too close to the ball, orbit it at a safe
+              distance until nearly on the aim line, then walk straight in
     ALIGN     turn in place to face along the aim, then walk in along the
               line, steering out any sideways error, and stop with the ball on
               the kick spot. (Pollen's walking policy can't shuffle: it ignores
@@ -36,7 +36,7 @@ do, so it can be tested against an imaginary duck (tests/test_kick_brain.py).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -77,8 +77,8 @@ class KickParams:
     standoff: float = 0.2                # pre-stance point this far behind the kick stance:
                                          # the run-in that steers out sideways error (0.2 beat
                                          # 0.15 and 0.25 in MuJoCo: most kicks/min, fewest retries)
-    approach_radius: float = 0.03
-    approach_slow: float = 0.3           # slow down this far from the pre-stance point (m)
+    # Walking to the pre-stance point: ALIGN takes over within catch_radius of it.
+    approach: SteerParams = field(default_factory=lambda: SteerParams(catch_radius=0.03, slow_radius=0.3))
     # Getting behind the ball when it's in the way: orbit it, a little further out
     # than the pre-stance point, until nearly on the aim line, then walk straight
     # in (which is then along the aim, so the duck arrives facing the right way).
@@ -87,9 +87,6 @@ class KickParams:
     orbit_margin: float = 0.1            # orbit this much further out than the pre-stance point
     orbit_lead: float = math.radians(35)  # steer at a point this far round the orbit ahead
     orbit_exit: float = math.radians(30)  # leave the orbit this close to the aim line
-    max_forward: float = 0.4
-    min_forward: float = 0.3             # velstand ignores less from a stand (see common/steer.py)
-    max_turn: float = 0.9
     # Fine alignment: turn in place, then walk in along the line, steering.
     min_turn: float = 0.75               # in-place turns below ~0.7 rad/s don't happen at all
     turn_first: float = math.radians(15)  # heading error above this: turn in place before walking in
@@ -130,17 +127,12 @@ class KickBrain(Brain):
         self._kick_peak = 0.0
         self._lined_up_t0 = None
         self._orbit_dir = 0.0            # +1 anticlockwise round the ball, -1 clockwise, 0 not orbiting
-        self._steer = SteerParams(max_forward=params.max_forward, min_forward=params.min_forward,
-                                  max_turn=params.max_turn, catch_radius=params.approach_radius,
-                                  slow_radius=params.approach_slow)
         # The current aim: a unit vector, where the ball was when it was picked,
         # and whether it was a free pick or a "come home" one.
         self.aim = None
         self.aim_from = None
         self.aim_mode = ""
-        # Exposed for drawing / logging:
-        self.stance = np.zeros(2)
-        self.target = np.zeros(2)
+        # Line-up errors, for the status panel and log.csv:
         self.align_err = float("nan")
         self.heading_err = float("nan")
 
@@ -250,18 +242,17 @@ class KickBrain(Brain):
     def _finish_kick(self, s):
         """Record how the last kick went: speed, distance, and where it went vs the aim."""
         k = self.events["kicks"][-1]
-        if "peak_ball_speed" not in k:
-            d = np.asarray(s.ball_xy, float) - np.array(k["ball_xy"])
-            travel = float(np.linalg.norm(d))
-            k["peak_ball_speed"] = round(self._kick_peak, 3)
-            k["travel_m"] = round(travel, 3)
-            k["end_xy"] = [float(v) for v in s.ball_xy]
-            if travel > self.p.moved:     # less than that and its direction means nothing
-                actual = math.degrees(math.atan2(d[1], d[0]))
-                k["actual_deg"] = round(actual, 1)
-                k["aim_err_deg"] = round(math.degrees(wrap(math.radians(actual - k["aim_deg"]))), 1)
-            else:
-                k["actual_deg"] = k["aim_err_deg"] = None
+        d = np.asarray(s.ball_xy, float) - np.array(k["ball_xy"])
+        travel = float(np.linalg.norm(d))
+        k["peak_ball_speed"] = round(self._kick_peak, 3)
+        k["travel_m"] = round(travel, 3)
+        k["end_xy"] = [float(v) for v in s.ball_xy]
+        if travel > self.p.moved:     # less than that and its direction means nothing
+            actual = math.degrees(math.atan2(d[1], d[0]))
+            k["actual_deg"] = round(actual, 1)
+            k["aim_err_deg"] = round(math.degrees(wrap(math.radians(actual - k["aim_deg"]))), 1)
+        else:
+            k["actual_deg"] = k["aim_err_deg"] = None
         return k
 
     # -- states ------------------------------------------------------------------
@@ -270,10 +261,9 @@ class KickBrain(Brain):
         # Pick the foot whose stance is closest to where the duck already is.
         options = {f: self.stance_for(s.ball_xy, f) for f in self.feet}
         self.foot = min(options, key=lambda f: np.linalg.norm(options[f] - s.duck_xy))
-        a = self.aim
-        self.stance = options[self.foot]
+        a, stance = self.aim, options[self.foot]
         ball, duck = np.asarray(s.ball_xy, float), np.asarray(s.duck_xy, float)
-        pre = self.stance - p.standoff * a       # where ALIGN takes over
+        pre = stance - p.standoff * a            # where ALIGN takes over
         d, e = duck - ball, pre - ball
         phi = math.atan2(d[1], d[0])             # where the duck is, round the ball
         left = wrap(math.atan2(e[1], e[0]) - phi)  # how far round `pre` still is, the shorter way
@@ -288,7 +278,7 @@ class KickBrain(Brain):
                 self.events["orbits"].append({"t": s.t, "deg": round(math.degrees(abs(left)))})
 
         if not self._orbit_dir:
-            self.target, route = pre, [pre]
+            target, route = pre, [pre]
         else:
             # Orbit the shorter way round, but near 180° keep the way already chosen
             # (no dithering), steering at a point `orbit_lead` ahead on the circle.
@@ -297,13 +287,13 @@ class KickBrain(Brain):
             if left * self._orbit_dir < 0:
                 left += self._orbit_dir * 2 * math.pi
             r = float(np.linalg.norm(e)) + p.orbit_margin
-            self.target = _on_circle(ball, r, phi + self._orbit_dir * min(abs(left), p.orbit_lead))
+            target = _on_circle(ball, r, phi + self._orbit_dir * min(abs(left), p.orbit_lead))
             steps = max(1, int(abs(left) / math.radians(10)))
             route = [_on_circle(ball, r, phi + left * k / steps) for k in range(1, steps + 1)] + [pre]
-        self.plan = [duck, *route, self.stance]
+        self.plan = [duck, *route, stance]
 
-        cmd, _, _ = steer_to(to_duck_frame(duck, s.duck_yaw, self.target), self._steer)
-        if np.linalg.norm(pre - duck) < p.approach_radius:
+        cmd, _, _ = steer_to(to_duck_frame(duck, s.duck_yaw, target), p.approach)
+        if np.linalg.norm(pre - duck) < p.approach.catch_radius:
             self.set_state("ALIGN", s.t, f"behind the ball, {self.foot} foot")
             return np.zeros(3, dtype=np.float32)
         return cmd
@@ -322,7 +312,6 @@ class KickBrain(Brain):
     def _align(self, s: Snapshot, dt_state):
         p, act = self.p, Action()
         e, h = self._errors(s)
-        self.target = self.spot_world(s.duck_xy, s.duck_yaw)
         err = float(np.linalg.norm(e))
         # "Got away" is judged in the world (how far the duck is from the kick
         # stance), not in the duck's frame, which swings wildly while turning.
@@ -364,8 +353,7 @@ class KickBrain(Brain):
         cut = float(np.clip(math.atan(p.align_lat_gain * lat), -p.align_max_cut, p.align_max_cut))
         hd = wrap(h + cut) if ahead > p.stop_lead else h
         if abs(hd) > p.turn_first:
-            # Facing well off: turn on the spot first (hard enough to beat the dead zone).
-            act.cmd = np.array([0.0, 0.0, math.copysign(p.min_turn, hd)], dtype=np.float32)
+            act.cmd = self._turn(hd)        # facing well off: turn on the spot first
         elif ahead > p.stop_lead:
             wz = float(np.clip(p.align_turn_gain * hd, -p.align_max_turn, p.align_max_turn))
             act.cmd = np.array([p.walk_in_v, 0.0, wz], dtype=np.float32)
@@ -373,12 +361,16 @@ class KickBrain(Brain):
             # Walked past it. The duck can't step back, so go round again.
             return self._retry(s, err, "overshot the ball")
         elif abs(h) > p.heading_tol:
-            act.cmd = np.array([0.0, 0.0, math.copysign(p.min_turn, h)], dtype=np.float32)
+            act.cmd = self._turn(h)
         else:
             # Right depth, facing along the aim, but the ball's still off the spot:
             # the duck can't shuffle, so retry.
             return self._retry(s, err, f"{err * 1000:.0f} mm off, can't shuffle")
         return act
+
+    def _turn(self, towards):
+        """Turn on the spot towards the sign of `towards`, hard enough to beat the dead zone."""
+        return np.array([0.0, 0.0, math.copysign(self.p.min_turn, towards)], dtype=np.float32)
 
     def _retry(self, s, err, why):
         self.events["retries"].append({"t": s.t, "err_m": round(err, 4), "why": why})
@@ -389,7 +381,6 @@ class KickBrain(Brain):
     def _settle(self, s: Snapshot, dt_state):
         p, act = self.p, Action()
         e, h = self._errors(s)
-        self.target = self.spot_world(s.duck_xy, s.duck_yaw)
         if dt_state < p.settle_s:
             return act
         err = float(np.linalg.norm(e))

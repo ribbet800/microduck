@@ -5,18 +5,7 @@ loads the duck with the BAM servo model and runs ONNX policies with the same
 61-D observation used in training. This module wraps it so a game only has to
 say what command to send each step.
 
-The runners here drive a game (common/game.py: `Game`), which has:
-    t                      sim time (s)
-    start()                put the duck and ball where they begin
-    tick()                 one 50 Hz control step
-    draw(scn)              append debug markers to a MuJoCo scene
-    status()               list of (label, value) strings for the on-screen panel
-    legend                 list of (colour, meaning) strings: what the markers mean
-    camera                 dict: {"track": True, "distance", "elevation", "azimuth"}
-                           or {"track": False, "lookat", "distance", ...}
-    log, events            dict of lists / dict of event lists, saved after headless runs
-    summary()              dict saved as summary.json
-    plots(out_dir)         write any PNGs
+The runners here drive a game: see common/game.py for what a game provides.
 """
 
 from __future__ import annotations
@@ -24,13 +13,16 @@ from __future__ import annotations
 import csv
 import json
 import math
-import os
 import sys
 import time
 import types
 from pathlib import Path
 
+import imageio.v2 as imageio
+import mujoco
 import numpy as np
+import onnxruntime as ort
+from huggingface_hub import hf_hub_download
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -43,28 +35,19 @@ FALLEN_Z = 0.075       # below this the duck is on the floor
 RECOVERED_Z = 0.105
 
 
-def setup_gl_for_headless():
-    """Offscreen rendering on Linux without a display needs EGL, and MuJoCo picks
-    its GL backend when first imported — so call this before importing mujoco."""
-    if "--headless" in sys.argv and "MUJOCO_GL" not in os.environ and sys.platform.startswith("linux"):
-        os.environ["MUJOCO_GL"] = "egl"
-
-
 # ---------------------------------------------------------------------------
 # Finding Pollen's code and policies
 # ---------------------------------------------------------------------------
 
 def find_rl_repo(cli_path: str | None = None) -> Path:
-    """Locate a checkout of pollen-robotics/microduck_rl."""
-    candidates = [cli_path, os.environ.get("MICRODUCK_RL"),
-                  REPO / "third_party" / "microduck_rl", REPO.parent / "microduck_rl"]
-    for c in candidates:
-        if c and (Path(c) / "scripts" / "infer_policy.py").exists():
-            return Path(c).resolve()
+    """Locate a checkout of pollen-robotics/microduck_rl: --rl-repo, else third_party/."""
+    path = Path(cli_path) if cli_path else REPO / "third_party" / "microduck_rl"
+    if (path / "scripts" / "infer_policy.py").exists():
+        return path.resolve()
     sys.exit(
-        "Couldn't find Pollen's microduck_rl repo. Clone it with\n"
+        f"Couldn't find Pollen's microduck_rl repo at {path}. Clone it with\n"
         "    git clone https://github.com/pollen-robotics/microduck_rl third_party/microduck_rl\n"
-        "or pass --rl-repo /path/to/microduck_rl (or set MICRODUCK_RL)."
+        "or pass --rl-repo /path/to/microduck_rl."
     )
 
 
@@ -82,23 +65,12 @@ def import_infer_policy(rl_repo: Path):
     return infer_policy
 
 
-def hub_policy(keywords: list[str], what: str, revision: str | None = None,
-               exact: str | None = None, how_to_train: str = "") -> str:
-    """Download a policy from Pollen's Hub repo: `exact` filename if it exists,
-    else the first .onnx whose name contains all `keywords`."""
+def hub_policy(name: str, what: str, revision: str | None = None, how_to_train: str = "") -> str:
+    """Download policy `name` from Pollen's Hub repo (once; then it's cached)."""
     try:
-        from huggingface_hub import hf_hub_download, list_repo_files
-        files = list_repo_files(POLICY_REPO, revision=revision)
-        onnx = sorted(f for f in files if f.endswith(".onnx"))
-        if exact and exact in onnx:
-            name = exact
-        else:
-            matches = [f for f in onnx if all(k in f.lower() for k in keywords)]
-            if not matches:
-                raise FileNotFoundError(f"no {what} policy among {onnx}")
-            name = min(matches, key=len)
-        print(f"Using {what} policy {name} from {POLICY_REPO} (downloaded once, then cached)")
-        return hf_hub_download(POLICY_REPO, name, revision=revision)
+        path = hf_hub_download(POLICY_REPO, name, revision=revision)
+        print(f"Using {what} policy {name} from {POLICY_REPO}")
+        return path
     except Exception as e:  # noqa: BLE001
         sys.exit(
             f"Couldn't get the {what} policy from https://huggingface.co/{POLICY_REPO} ({e}).\n\n"
@@ -110,7 +82,7 @@ def hub_policy(keywords: list[str], what: str, revision: str | None = None,
 
 def walking_policy(path: str | None, revision: str | None) -> str:
     return path or hub_policy(
-        ["velstand"], "walking", revision, exact="velstand.onnx",
+        "velstand.onnx", "walking", revision,
         how_to_train=("velstand.onnx (walks AND gets up after falls) is best; alpha_walking.onnx also works. "
                       "Or train your own in microduck_rl: `uv run train Mjlab-VelStand-Flat-MicroDuck`, "
                       "then `uv run scripts/export.py ...`."))
@@ -129,7 +101,6 @@ def set_ball_roll(model, metres: float):
     (0.13-5 m). 0 leaves Pollen's ball as it is."""
     if not metres:
         return
-    import mujoco
     mu, dist = np.log(np.array(_ROLL_TABLE)).T
     g = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ball_geom")
     model.geom_condim[g] = 6                       # turns on torsional + rolling friction
@@ -140,9 +111,6 @@ def build_sim(ip, rl_repo: Path, walking_path: str, use_bam: bool = True,
               kick_left: str | None = None, kick_right: str | None = None, kick_duration: float = 3.0,
               ball_roll: float = 1.0):
     """Load the duck + ball scene and Pollen's PolicyInference runner."""
-    import mujoco
-    import onnxruntime as ort
-
     xml = str(rl_repo / ip.MICRODUCK_BALL_XML)   # groundcontact duck + 70 mm / 15 g ball
     bam_ctrl = None
     if use_bam:
@@ -178,8 +146,6 @@ class Duck:
     """Thin wrapper round the sim: reset, read state, step, move the ball, kick."""
 
     def __init__(self, model, data, bam_ctrl, policy):
-        import mujoco
-        self.mj = mujoco
         self.model, self.data, self.bam_ctrl, self.policy = model, data, bam_ctrl, policy
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")
         self.qadr = int(model.jnt_qposadr[jid])
@@ -202,7 +168,7 @@ class Duck:
             self.bam_ctrl.reset(d.qpos)
         p.set_position_targets(p.default_pose)
         p.last_action[:] = 0.0
-        self.mj.mj_forward(self.model, d)
+        mujoco.mj_forward(self.model, d)
 
     def place_ball(self, x, y):
         self.data.qpos[self.ball_q:self.ball_q + 7] = [x, y, 0.035, 1, 0, 0, 0]
@@ -272,7 +238,7 @@ class Duck:
         for _ in range(DECIMATION):
             if self.bam_ctrl is not None:
                 self.bam_ctrl.update()
-            self.mj.mj_step(self.model, self.data)
+            mujoco.mj_step(self.model, self.data)
 
 
 # ---------------------------------------------------------------------------
@@ -280,16 +246,14 @@ class Duck:
 # ---------------------------------------------------------------------------
 
 def _apply_camera(cam, spec, trunk_id):
-    import mujoco
-    if spec.get("track", True):
+    """`spec` is a game's `camera` dict (common/game.py)."""
+    if spec["track"]:
         cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         cam.trackbodyid = trunk_id
     else:
         cam.type = mujoco.mjtCamera.mjCAMERA_FREE
         cam.lookat[:] = spec["lookat"]
-    cam.distance = spec.get("distance", 2.4)
-    cam.elevation = spec.get("elevation", -45)
-    cam.azimuth = spec.get("azimuth", 135)
+    cam.distance, cam.elevation, cam.azimuth = spec["distance"], spec["elevation"], spec["azimuth"]
 
 
 MIN_SPEED, MAX_SPEED = 0.125, 16.0
@@ -310,8 +274,7 @@ def _panel(text: str) -> str:
 
 def run_live(duck: Duck, game, speed: float = 1.0):
     """Run the game in MuJoCo's viewer, `speed` x real time (keys change it)."""
-    import mujoco
-    import mujoco.viewer
+    import mujoco.viewer   # here, not at the top: it loads GLFW, which headless EGL machines may lack
 
     ctl = {"speed": speed, "paused": False, "steps": 0}
 
@@ -370,11 +333,8 @@ def run_live(duck: Duck, game, speed: float = 1.0):
 def run_headless(duck: Duck, game, duration: float, out_dir: Path, video: bool, speed: float = 1.0,
                  fps: int = 25, size=(1280, 720)):
     """Run as fast as possible. The video plays at `speed` x real time."""
-    import mujoco
-
     renderer = writer = None
     if video:
-        import imageio.v2 as imageio
         vis = duck.model.vis.global_          # the offscreen buffer must fit the frame
         vis.offwidth, vis.offheight = max(vis.offwidth, size[0]), max(vis.offheight, size[1])
         renderer = mujoco.Renderer(duck.model, width=size[0], height=size[1])
@@ -465,7 +425,6 @@ def make_duck(args, kick_left: str | None = None, kick_right: str | None = None)
 
 def run(duck: Duck, game, args, game_name: str):
     """Start the game, then watch it live or run it headless and save the outputs."""
-    game.ball_roll = args.ball_roll or 2.0       # 0: Pollen's ball never stops; draw it 2 m
     game.start()
     print(f"\nRunning {game_name}: " + ("headless" if args.headless else
                                          f"close the viewer window to stop. Keys: {KEYS_HINT}."))

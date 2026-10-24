@@ -2,11 +2,9 @@
 """Kick loop: the duck walks up to the ball, kicks it, follows it, kicks it again.
 
 Pollen's walking policy is the legs and Pollen's kick policy is the boot. The
-brain (kick/brain.py) picks a random direction for each kick (roughly onwards
-from where the duck is, and back towards the middle once the ball strays
-outside the arena), walks round behind the ball, walks in along that line until
-the ball is exactly in front of a foot, stands still, swaps in the kick policy,
-watches where the ball goes, and does it all again.
+brain (kick/brain.py, which explains how) picks a random direction for each
+kick, gets behind the ball, lines up until the ball is exactly in front of a
+foot, swaps in the kick policy, watches where the ball goes, and does it again.
 
   Live:      uv run kick/kick_loop.py            (macOS: uv run mjpython kick/kick_loop.py)
   Headless:  uv run kick/kick_loop.py --headless --duration 180 --video
@@ -19,32 +17,31 @@ the exact spot (Pollen's own demo always does this).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import sys
 from pathlib import Path
 
 import numpy as np
 
-HERE = Path(__file__).resolve().parent
-sys.path[:0] = [str(HERE), str(HERE.parent)]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # so `uv run kick/kick_loop.py` finds the packages
 
-from common import sim  # noqa: E402
-
-sim.setup_gl_for_headless()   # must run before mujoco is imported
-
-from common import overlay  # noqa: E402
+from common import overlay, sim  # noqa: E402
 from common.game import Game  # noqa: E402
-from brain import WHIFF_SPEED, KickBrain, KickParams  # noqa: E402
-import kick_plots  # noqa: E402
+from kick import plots  # noqa: E402
+from kick.brain import WHIFF_SPEED, KickBrain, KickParams  # noqa: E402
 
 
 class KickLoop(Game):
     """The brain does nearly everything here; the game draws it and keeps score."""
 
     trail_len = 150
+    area_legend = ("faint circle", "soft arena: outside it, kicks aim back home")
 
-    def __init__(self, duck: sim.Duck, brain: KickBrain, follow: bool):
+    def __init__(self, duck: sim.Duck, brain: KickBrain, follow: bool, ball_roll: float = 1.0):
         super().__init__(duck, brain)
+        self.ball_roll = ball_roll       # how long to draw the aim arrow (m)
+        self.line = None                 # kickback's line, for the top-down plot
         self.camera = ({"track": True, "distance": 1.8, "elevation": -40, "azimuth": 135} if follow else
                        {"track": False, "lookat": [0.0, 0.0, 0.0], "distance": 4.2, "elevation": -60, "azimuth": 90})
 
@@ -60,10 +57,11 @@ class KickLoop(Game):
                 "heading_err": b.heading_err if lined_up else float("nan")}
 
     # -- drawing ------------------------------------------------------------------
-    # The area's row comes last: a game that overrides draw_area swaps it.
-    legend = Game.legend + [("yellow", "where the next kick should send the ball (orange: home), ball trail"),
-                            ("red / green", "kick spot in front of the foot: green = ball on it"),
-                            ("faint circle", "soft arena: outside it, kicks aim back home")]
+    @property
+    def legend(self):
+        return Game.legend + [("yellow", "where the next kick should send the ball (orange: home), ball trail"),
+                              ("red / green", "kick spot in front of the foot: green = ball on it"),
+                              self.area_legend]
 
     def draw(self, scn):
         super().draw(scn)
@@ -94,9 +92,12 @@ class KickLoop(Game):
         done = [k for k in kicks if k.get("aim_err_deg") is not None]
         last = (f"aimed {done[-1]['aim_deg']:+.0f}°, went {done[-1]['actual_deg']:+.0f}°, "
                 f"{done[-1]['travel_m']:.2f} m") if done else "-"
+        aim = "-"
+        if b.aim is not None:
+            aim = f"{b.aim_deg:+.0f}°" + (" (home)" if b.aim_mode == "home" else "")
         return super().status() + [
             ("foot", b.foot),
-            ("next aim", f"{b.aim_deg:+.0f}°" + (" (home)" if b.aim_mode == "home" else "") if b.aim is not None else "-"),
+            ("next aim", aim),
             ("kicks", f"{len(kicks)}" + (f" ({assisted} assisted)" if assisted else "")),
             ("last kick", last),
             ("line-up error", err)]
@@ -120,15 +121,14 @@ class KickLoop(Game):
                 "home_aims": sum(1 for k in kicks if k["aim_mode"] == "home"),
                 "line_up_retries": len(b.events["retries"]),
                 "timeouts": len(b.events["timeouts"]),
-                "params": vars(b.p)}
+                "params": dataclasses.asdict(b.p)}
 
     def plots(self, out_dir):
         p = self.brain.p
-        kick_plots.topdown(self.log, self.events, p, str(out_dir / "topdown.png"),
-                           line=getattr(self.brain, "ends", None))
-        kick_plots.alignment(self.events, p, str(out_dir / "alignment.png"))
-        kick_plots.aiming(self.events, str(out_dir / "aiming.png"))
-        kick_plots.timeline(self.log, self.events, p, str(out_dir / "timeline.png"))
+        plots.topdown(self.log, self.events, p, str(out_dir / "topdown.png"), line=self.line)
+        plots.alignment(self.events, p, str(out_dir / "alignment.png"))
+        plots.aiming(self.events, str(out_dir / "aiming.png"))
+        plots.timeline(self.log, self.events, p, str(out_dir / "timeline.png"))
         return ["topdown.png", "alignment.png", "aiming.png", "timeline.png"]
 
 
@@ -151,8 +151,8 @@ def make_kick_duck(args):
     paths = {}
     for foot in feet:
         given = getattr(args, f"kick_{foot}")
-        paths[foot] = given or sim.hub_policy(["kick", foot], f"{foot}-foot kick", args.policy_revision,
-                                              exact=f"ball_kick_{foot}.onnx", how_to_train=train_hint)
+        paths[foot] = given or sim.hub_policy(f"ball_kick_{foot}.onnx", f"{foot}-foot kick", args.policy_revision,
+                                              how_to_train=train_hint)
     return sim.make_duck(args, kick_left=paths.get("left"), kick_right=paths.get("right")), feet
 
 
@@ -161,7 +161,7 @@ def main():
     sim.add_common_args(ap)
     add_kick_args(ap)
     ap.add_argument("--aim-spread", type=float, default=math.degrees(KickParams.aim_spread),
-                    help="random aim: up to this many degrees either side of the duck->ball direction")
+                    help="random aim: up to this many degrees either side of its base direction")
     ap.add_argument("--arena", type=float, default=KickParams.arena_radius,
                     help="soft arena radius (m): outside it, kicks aim back towards the middle")
     ap.add_argument("--centre-bias", type=float, default=KickParams.centre_bias,
@@ -174,7 +174,12 @@ def main():
                         aim_spread=math.radians(args.aim_spread), arena_radius=args.arena,
                         centre_bias=args.centre_bias)
     brain = KickBrain(params, feet, rng=np.random.default_rng(args.seed))
-    sim.run(duck, KickLoop(duck, brain, follow=args.follow), args, "kick")
+    sim.run(duck, KickLoop(duck, brain, args.follow, aim_arrow(args)), args, "kick")
+
+
+def aim_arrow(args) -> float:
+    """How long to draw the aim arrow: about one kick's roll (Pollen's ball, 0, never stops: 2 m)."""
+    return args.ball_roll or 2.0
 
 
 if __name__ == "__main__":
