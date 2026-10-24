@@ -84,10 +84,12 @@ common/                 shared by every behaviour
 ├── run.py              command-line options, live viewer, headless runs and their outputs
 ├── steer.py            "walk to that point" steering + frame geometry
 ├── toy.py              a numpy duck + ball (no MuJoCo) for testing and training brains
+├── training.py         what every training run saves: report.html, progress.mp4, the PPO log
 └── overlay.py          3D markers and the one colour palette they share
 chase/                  one folder per behaviour:
 ├── game.py             rules, drawing, score, plots; the script you run
-├── brain.py            CHASE / RECOVER
+├── brain.py            CHASE / RECOVER: hand-written (ChaseBrain) or learned (LearnedBrain)
+├── train.py            trains the learned brain in the toy world
 └── plots.py
 kickback/
 ├── game.py
@@ -122,10 +124,30 @@ return Action(skill="wave")                                             # in the
 Any episodic policy with the shared 61-D observation works: it takes over from
 walking for its time, then hands back.
 
-**A learned brain** (e.g. a network instead of `ChaseBrain`). It's just another
-brain: the same `Snapshot -> Action`. Train it in `common/toy.py` (fast, plain
-numpy), then drop it into the game in place of the hand-written one. plans.md
-has the design.
+**A learned brain.** Chase has one: a small network trained by trial and
+error (PPO) in the toy world, rewarded for getting closer to the ball and for
+reaching it. Train it (about 8 minutes on a laptop CPU; the first run installs
+PyTorch), then watch it in MuJoCo:
+
+```bash
+uv run --group train chase/train.py
+```
+```bash
+uv run chase/game.py --brain runs/chase_learned/brain.onnx
+```
+
+Every training run saves to its folder (here `runs/chase_learned/`):
+
+- `report.html`: open this. What it was trained to do (what it sees, does, and is
+  rewarded for), its score at each checkpoint against the hand-written brain, the
+  reward and PPO losses after every update (with what each one means), and the video.
+- `progress.mp4`: one top-down clip per checkpoint, from random flailing to beelining.
+- `checkpoints/`: the brain at each stage, so you can watch any of them in MuJoCo with `--brain`.
+- `brain.onnx` (the final brain) and `ppo.zip` (to keep training).
+
+`chase/train.py` is the template for training other brains: a Gymnasium env
+around `common/toy.py`, with what the brain sees and does defined once in its
+`brain.py`, and `common/training.py` for the report and video.
 
 ## License
 

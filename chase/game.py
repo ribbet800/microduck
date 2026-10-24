@@ -32,7 +32,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # so `uv run chase/game.py` finds the packages
 
 from chase import plots  # noqa: E402
-from chase.brain import ChaseBrain  # noqa: E402
+from chase.brain import ChaseBrain, LearnedBrain  # noqa: E402
 from common import overlay, run  # noqa: E402
 from common.brain import Snapshot  # noqa: E402
 from common.duck import Duck  # noqa: E402
@@ -41,6 +41,7 @@ from common.steer import SteerParams, to_duck_frame  # noqa: E402
 
 CATCH_RADIUS = SteerParams.catch_radius   # within this (m) of the ball counts as reached
 GIVE_UP_S = 25.0                          # a ball not reached by then is respawned
+SPAWN_R = (0.6, 1.4)                      # new balls drop this far (m) from the duck
 
 
 class Chase(Game):
@@ -50,9 +51,9 @@ class Chase(Game):
     name = "chase"
     legend = Game.legend + [("green", "catch radius: inside it counts as reached")]
 
-    def __init__(self, duck: Duck, brain, rng: np.random.Generator, spawn_r=(0.6, 1.4)):
+    def __init__(self, duck: Duck, brain, rng: np.random.Generator):
         super().__init__(duck, brain)
-        self.rng, self.spawn_r = rng, spawn_r
+        self.rng = rng
         self.ball_t0 = 0.0
         self.dist = self.bearing = float("nan")
         self.events.update({"spawns": [], "catches": [], "timeouts": []})
@@ -64,7 +65,7 @@ class Chase(Game):
     def _new_ball(self):
         """Drop the ball at a random spot 0.6-1.4 m from the duck."""
         x, y = self.duck.xy
-        r, a = self.rng.uniform(*self.spawn_r), self.rng.uniform(-math.pi, math.pi)
+        r, a = self.rng.uniform(*SPAWN_R), self.rng.uniform(-math.pi, math.pi)
         bx, by = float(x + r * math.cos(a)), float(y + r * math.sin(a))
         self.duck.place_ball(bx, by)
         self.events["spawns"].append((bx, by))
@@ -103,7 +104,8 @@ class Chase(Game):
                 "balls_reached": len(took),
                 "mean_time_to_reach_s": round(float(np.mean(took)), 2) if took else None,
                 "gave_up": len(self.events["timeouts"]),
-                "params": dataclasses.asdict(self.brain.p) if hasattr(self.brain, "p") else {}}
+                "brain": type(self.brain).__name__,
+                "params": dataclasses.asdict(self.brain.p) if dataclasses.is_dataclass(self.brain.p) else self.brain.p}
 
     def plots(self, out_dir):
         plots.topdown(self.log, self.events, str(out_dir / "topdown.png"), CATCH_RADIUS)
@@ -115,10 +117,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     run.add_args(ap)
     ap.add_argument("--seed", type=int, default=0, help="where the balls drop (repeatable)")
+    ap.add_argument("--brain", type=str, default=None,
+                    help="a learned brain (ONNX from chase/train.py) instead of the hand-written one")
     args = ap.parse_args()
 
     duck = run.duck_from_args(args)
-    run.play(Chase(duck, ChaseBrain(), rng=np.random.default_rng(args.seed)), args)
+    brain = LearnedBrain(args.brain) if args.brain else ChaseBrain()
+    run.play(Chase(duck, brain, rng=np.random.default_rng(args.seed)), args)
 
 
 if __name__ == "__main__":

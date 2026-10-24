@@ -99,36 +99,25 @@ kickback's ~12 kicks / 5 min) unless marked otherwise.
 
 ## 3. Chase roadmap: towards fetch
 
-### Stage 1: learn the brain (replace `ChaseBrain` with a trained policy)
+### Stage 1: learn the brain — done (2026-10-24)
 
-**Goal:** a small network maps (ball position in the duck's frame) → (vx, vy, wz), trained
-with RL, with Pollen's walking policy frozen as the legs. Success means it matches or beats the
-hand-coded chaser on balls/minute with the same or fewer falls. It's also fun to watch it
-learn: start spinning randomly, end beelining.
+`chase/train.py` trains a small network (PPO, stable-baselines3) in the toy world with lazy
+legs; `LearnedBrain` in `chase/brain.py` runs the exported ONNX; `chase/game.py --brain`.
 
-**Design:**
-- **Observation (small, ~6–8 numbers):** ball (x, y) in the duck frame, distance, bearing as
-  sin/cos, the last command (3), optionally the duck's forward speed and yaw rate. Normalise.
-- **Action:** 3 numbers squashed to the training ranges (vx ∈ [−0.1, 0.35], vy ∈ ±0.2, wz ∈ ±1.0).
-- **Decision rate:** run the brain at 10 Hz (hold each command for 5 walking-policy steps).
-- **Reward:** potential-based progress, `r = (d_prev − d_now) / dt` scaled. Add a catch bonus
-  (+10, then respawn the ball, keep the episode going), a fall penalty (−5, end the episode),
-  and a small action-change penalty for smoothness. Per Pollen's AGENTS.md: avoid jackpots and
-  never pay a reward for sitting in a state.
-- **Episodes:** 20–30 s, ball respawned at 0.5–1.5 m on catch, random duck start heading.
+- **Sees** (`observe`): ball x, y in the duck frame, distance, bearing as sin/cos, last command.
+- **Does** (`to_command`): forward 0–0.4 m/s and turn ±1 rad/s (no vy: the legs can't
+  sidestep), decided at 10 Hz and held for 5 ticks.
+- **Reward:** 10 per metre of progress + 10 per catch (then a new ball), 30 s episodes.
+- **Result:** in the toy world it matches the hand-written brain within ~1 min of training
+  (5.5 balls/min both: the toy legs' top speed is the ceiling). **In MuJoCo it beats it:**
+  25 and 27 balls / 180 s vs 18 and 19 (seeds 0, 1), 0 falls, ~6.8 s vs ~9.5 s per ball.
+  Why: it turns much harder while walking (mean |wz| 0.56 vs 0.24 rad/s) and rarely stops to
+  turn (5% vs 9% of the time), and the real velstand walks faster that way (0.148 vs
+  0.102 m/s achieved). The toy legs don't model that, so the toy world under-rated it.
 
-**Where to train**, cheapest first:
-1. **Toy world first (recommended):** `common/toy.py` already speaks Snapshot → Action.
-   Fit its legs better from `log.csv` of real runs (commanded vs achieved vx, wz: lag + gain +
-   noise), wrap it as a Gymnasium env, train PPO in minutes on a laptop CPU.
-2. **Real MuJoCo on CPU:** the same env around `common.game.Game` + `common.duck.Duck`, 4–8
-   copies with `gymnasium.vector.AsyncVectorEnv`, stable-baselines3 PPO. For fine-tuning.
-3. **Pollen's GPU stack (mjlab / MuJoCo Warp):** a new task in `microduck_rl` with the walking
-   policy frozen inside the env. Overkill for this.
-
-**Steps:** `chase/train.py` (toy-world env + PPO, saves ONNX); a `LearnedBrain` in
-`chase/brain.py` that runs the ONNX in `update()`; `chase/game.py --brain learned.onnx`.
-Deps to add then: `gymnasium`, `stable-baselines3`, `torch` (CPU).
+Next, if wanted: make `lazy_legs` speed depend on turning (fit from `log.csv` of real runs)
+so the toy world ranks brains like MuJoCo does; fine-tune in MuJoCo (a Gymnasium env around
+`common.game.Game` + `Duck`, a few CPU copies); then the same recipe for kickback's ALIGN.
 
 ### Stage 2: grab the ball with the beak
 - First check physics: can the beak hold a 70 mm / 15 g ball at all in sim? Find the jaw
@@ -211,3 +200,5 @@ Add dated entries: what was tried, numbers, what was learned.
   removed; layout became one folder per behaviour (`chase/`, `kickback/`); `sim.py` split
   into `duck.py` (with generic named skills) and `run.py`; the tests' imaginary duck promoted
   to `common/toy.py`. Same-seed MuJoCo runs of both games identical before and after.
+  First learned brain: chase PPO in the toy world (~6 min CPU), ~40% more balls than the
+  hand-written chaser in MuJoCo (§3 Stage 1).

@@ -59,9 +59,27 @@ stateDiagram-v2
 ```
 
 "Reached it" = trunk within 13 cm of the ball; "gave up" = 25 s on one ball.
-In CHASE the command comes from `common/steer.py: steer_to`: turn towards the
-ball, walk only when roughly facing it, slow down near it, and never send a
-forward command the walking policy would ignore (below 0.3 m/s).
+In CHASE the hand-written `ChaseBrain` gets its command from
+`common/steer.py: steer_to`: turn towards the ball, walk only when roughly
+facing it, slow down near it, and never send a forward command the walking
+policy would ignore (below 0.3 m/s).
+
+`LearnedBrain` (`--brain file.onnx`) has the same two states, but in CHASE a
+small network picks the command instead, 10 times a second:
+
+```mermaid
+flowchart LR
+    S[/"Snapshot"/] --> O["observe()<br/>ball x, y, distance,<br/>bearing sin / cos,<br/>last command"]
+    O --> N["network<br/>(brain.onnx)"]
+    N --> C["to_command()<br/>forward 0-0.4 m/s,<br/>turn ±1 rad/s"]
+    C --> A[/"Action"/]
+    classDef ours fill:#dbeafe,stroke:#2563eb,color:#0b2545
+    class S,O,N,C,A ours
+```
+
+`chase/train.py` trains it with PPO in the toy world (lazy legs), rewarding
+progress towards the ball (10 per metre) and each catch (10), in 30 s
+episodes with a new ball after every catch.
 
 ## Kickback: the brain's state machine
 

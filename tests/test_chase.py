@@ -88,3 +88,34 @@ def test_chase_brain_reaches_the_ball_and_recovers_from_a_fall(lazy):
     else:
         pytest.fail("never reached the ball")
     assert "back up" in brain.last_change
+
+
+# -- the learned brain's inputs and outputs (chase/brain.py) -------------------------
+
+def test_learned_brain_sees_the_ball_in_its_own_frame():
+    from chase.brain import OBS_SIZE, observe
+    w = ToyWorld(yaw=math.pi / 2, ball_xy=(0.0, 1.0))         # facing +y, ball 1 m straight ahead
+    o = observe(w.snapshot(), np.zeros(3))
+    assert o.shape == (OBS_SIZE,) and o.dtype == np.float32
+    assert o[:5] == pytest.approx([0.5, 0.0, 0.5, 0.0, 1.0], abs=1e-6)
+    assert np.all(np.abs(o) <= 3.0)                           # inside the training env's observation space
+
+
+def test_learned_brain_commands_stay_in_the_trained_ranges():
+    from chase.brain import MAX_FORWARD, MAX_TURN, to_command
+    assert to_command([-1, 0]) == pytest.approx([0.0, 0.0, 0.0])
+    assert to_command([1, 1]) == pytest.approx([MAX_FORWARD, 0.0, MAX_TURN])
+    assert to_command([5, -5]) == pytest.approx([MAX_FORWARD, 0.0, -MAX_TURN])   # clipped
+
+
+def test_training_env_steps():
+    pytest.importorskip("gymnasium")                          # only with: uv run --group train pytest
+    from chase.train import ChaseEnv
+    env = ChaseEnv()
+    obs, _ = env.reset(seed=0)
+    assert env.observation_space.contains(obs)
+    total = 0.0
+    for _ in range(300):                                      # a whole 30 s episode
+        obs, r, terminated, truncated, info = env.step(np.array([1.0, 0.0], np.float32))
+        total += r
+    assert truncated and np.isfinite(total)

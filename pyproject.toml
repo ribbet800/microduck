@@ -19,6 +19,13 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest"]
+# Only for training brains (`uv run --group train chase/train.py`); playing a trained one needs none of it.
+train = [
+    "gymnasium>=1.4.0",
+    "onnx>=1.23.2",
+    "stable-baselines3>=2.9.0",
+    "torch>=2.14.1",
+]
 
 [tool.pytest.ini_options]
 # Only our tests: third_party/microduck_rl has its own, which need its GPU stack.
