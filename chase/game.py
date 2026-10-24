@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Fetch, Stage 0: a duck that chases a ball. No training needed.
+"""Chase: a duck that chases a ball. No training needed.
 
 Pollen's trained walking policy ("the legs") runs exactly as it does in their
 `infer_policy.py` rehearsal script — same BAM servo model, same 61-D
 observation, same 50 Hz control loop. The only change is who sends the
-velocity command: instead of your keyboard, the brain (`chaser.ChaseBrain`)
+velocity command: instead of your keyboard, the brain (`chase/brain.py`)
 looks at where the ball is and steers towards it. When the duck reaches the
 ball, the ball jumps somewhere new and the chase starts again.
 
   Live (watch it in the MuJoCo viewer):
-      uv run fetch/chase_ball.py                 # Windows / Linux
-      uv run mjpython fetch/chase_ball.py        # macOS needs mjpython for the viewer
+      uv run chase/game.py                 # Windows / Linux
+      uv run mjpython chase/game.py        # macOS needs mjpython for the viewer
 
   Headless (fast, saves plots + optional video to runs/chase_<time>/):
-      uv run fetch/chase_ball.py --headless --duration 90 --video
+      uv run chase/game.py --headless --duration 90 --video
 
 In the live viewer you can mess with the ball: double-click it to select,
 then Ctrl + right-drag to shove it around.
@@ -29,24 +29,30 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # so `uv run fetch/chase_ball.py` finds the packages
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # so `uv run chase/game.py` finds the packages
 
-from common import overlay, sim  # noqa: E402
+from chase import plots  # noqa: E402
+from chase.brain import ChaseBrain  # noqa: E402
+from common import overlay, run  # noqa: E402
 from common.brain import Snapshot  # noqa: E402
+from common.duck import Duck  # noqa: E402
 from common.game import Game  # noqa: E402
 from common.steer import SteerParams, to_duck_frame  # noqa: E402
-from fetch import plots  # noqa: E402
-from fetch.chaser import ChaseBrain  # noqa: E402
+
+CATCH_RADIUS = SteerParams.catch_radius   # within this (m) of the ball counts as reached
+GIVE_UP_S = 25.0                          # a ball not reached by then is respawned
 
 
 class Chase(Game):
     """The game rules: count catches, respawn the ball, give up on a ball after a while.
     The brain only steers; any brain with the common/brain.py interface fits."""
 
-    def __init__(self, duck: sim.Duck, brain, catch_radius: float, give_up_s: float,
-                 rng: np.random.Generator, spawn_r=(0.6, 1.4)):
+    name = "chase"
+    legend = Game.legend + [("green", "catch radius: inside it counts as reached")]
+
+    def __init__(self, duck: Duck, brain, rng: np.random.Generator, spawn_r=(0.6, 1.4)):
         super().__init__(duck, brain)
-        self.catch_radius, self.give_up_s, self.rng, self.spawn_r = catch_radius, give_up_s, rng, spawn_r
+        self.rng, self.spawn_r = rng, spawn_r
         self.ball_t0 = 0.0
         self.dist = self.bearing = float("nan")
         self.events.update({"spawns": [], "catches": [], "timeouts": []})
@@ -67,25 +73,23 @@ class Chase(Game):
     def rules(self, s: Snapshot):
         rel = to_duck_frame(s.duck_xy, s.duck_yaw, s.ball_xy)
         self.dist, self.bearing = float(np.hypot(*rel)), float(math.atan2(rel[1], rel[0]))
-        if self.dist < self.catch_radius and not s.fallen:
+        if self.dist < CATCH_RADIUS and not s.fallen:
             took = s.t - self.ball_t0
             self.events["catches"].append({"t": s.t, "took_s": took,
                                            "duck_x": float(s.duck_xy[0]), "duck_y": float(s.duck_xy[1])})
             print(f"[{s.t:6.1f}s] reached ball #{len(self.events['catches'])} in {took:.1f}s")
             self._new_ball()
-        elif s.t - self.ball_t0 > self.give_up_s:
+        elif s.t - self.ball_t0 > GIVE_UP_S:
             self.events["timeouts"].append({"t": s.t})
-            print(f"[{s.t:6.1f}s] gave up on that ball after {self.give_up_s:.0f}s — new ball")
+            print(f"[{s.t:6.1f}s] gave up on that ball after {GIVE_UP_S:.0f}s — new ball")
             self._new_ball()
 
     def log_row(self):
         return {**super().log_row(), "dist": self.dist, "bearing": self.bearing}
 
-    legend = Game.legend + [("green", "catch radius: inside it counts as reached")]
-
     def draw(self, scn):
         super().draw(scn)
-        overlay.disc(scn, self.duck.ball[:2], self.catch_radius, (*overlay.GREEN[:3], 0.3))
+        overlay.disc(scn, self.duck.ball[:2], CATCH_RADIUS, (*overlay.GREEN[:3], 0.3))
 
     def status(self):
         return super().status() + [
@@ -102,31 +106,19 @@ class Chase(Game):
                 "params": dataclasses.asdict(self.brain.p) if hasattr(self.brain, "p") else {}}
 
     def plots(self, out_dir):
-        r = self.catch_radius
-        plots.topdown(self.log, self.events, str(out_dir / "topdown.png"), r)
-        plots.timeseries(self.log, self.events, str(out_dir / "timeseries.png"), r)
+        plots.topdown(self.log, self.events, str(out_dir / "topdown.png"), CATCH_RADIUS)
+        plots.timeseries(self.log, self.events, str(out_dir / "timeseries.png"), CATCH_RADIUS)
         return ["topdown.png", "timeseries.png"]
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sim.add_common_args(ap)
-    ap.add_argument("--give-up", type=float, default=25.0, help="seconds before a ball is respawned")
-    ap.add_argument("--max-forward", type=float, default=SteerParams.max_forward)
-    ap.add_argument("--min-forward", type=float, default=SteerParams.min_forward,
-                    help="smallest forward command sent (the walking policy ignores less)")
-    ap.add_argument("--max-turn", type=float, default=SteerParams.max_turn)
-    ap.add_argument("--turn-gain", type=float, default=SteerParams.turn_gain)
-    ap.add_argument("--catch-radius", type=float, default=SteerParams.catch_radius)
+    run.add_args(ap)
+    ap.add_argument("--seed", type=int, default=0, help="where the balls drop (repeatable)")
     args = ap.parse_args()
 
-    duck = sim.make_duck(args)
-    brain = ChaseBrain(SteerParams(max_forward=args.max_forward, min_forward=args.min_forward,
-                                   max_turn=args.max_turn, turn_gain=args.turn_gain,
-                                   catch_radius=args.catch_radius))
-    game = Chase(duck, brain, catch_radius=args.catch_radius, give_up_s=args.give_up,
-                 rng=np.random.default_rng(args.seed))
-    sim.run(duck, game, args, "chase")
+    duck = run.duck_from_args(args)
+    run.play(Chase(duck, ChaseBrain(), rng=np.random.default_rng(args.seed)), args)
 
 
 if __name__ == "__main__":

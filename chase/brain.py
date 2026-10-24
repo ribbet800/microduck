@@ -1,11 +1,11 @@
-"""The "brain" for Stage 0 of fetch: a hand-written ball chaser.
+"""Chase's brain: a hand-written ball chaser.
 
     CHASE     steer straight at the ball (common/steer.py: ~20 lines of geometry)
     RECOVER   fell over: zero command while the walking policy gets up
 
 Reaching the ball, respawning it and giving up are game rules, not the
-brain's business (fetch/chase_ball.py). Stage 1 swaps this for a small trained
-policy: any brain with the common/brain.py interface fits.
+brain's business (chase/game.py). A trained brain can replace this one: any
+object with the common/brain.py interface fits.
 """
 
 from __future__ import annotations

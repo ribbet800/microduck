@@ -1,9 +1,8 @@
-"""Checks the steering and the ball-chasing brain on their own, with imaginary legs.
+"""Checks the steering and the chase brain in the toy world (common/toy.py).
 
-The ideal walker moves exactly as commanded (a unicycle: forward speed + turn
-rate); `lazy=True` gives it legs like the real walking policy (tests/legs.py).
-If the chaser can't catch the ball with these, it won't with real ones. Runs in
-a fraction of a second, no MuJoCo needed.
+Perfect legs move exactly as commanded; `lazy=True` gives legs like the real
+walking policy. If the chaser can't catch the ball with these, it won't with
+real ones. Runs in a fraction of a second, no MuJoCo needed.
 """
 
 import math
@@ -11,25 +10,21 @@ import math
 import numpy as np
 import pytest
 
-from common.brain import Snapshot
-from common.sim import yaw_from_quat
-from common.steer import SteerParams, from_duck_frame, steer_to, to_duck_frame
-from fetch.chaser import ChaseBrain
-from tests.legs import lazy_legs
+from chase.brain import ChaseBrain
+from common.brain import Action
+from common.steer import SteerParams, from_duck_frame, steer_to, to_duck_frame, yaw_from_quat
+from common.toy import DT, ToyWorld
 
 
-def simulate(ball, yaw0=0.0, seconds=30.0, dt=0.02, p=SteerParams(), lazy=False):
-    pos, yaw, walking = np.zeros(2), yaw0, False
-    for step in range(int(seconds / dt)):
-        cmd, dist, _ = steer_to(to_duck_frame(pos, yaw, ball), p)
+def time_to_reach(ball, lazy=False, seconds=30.0, p=SteerParams()):
+    """Steer straight at `ball` from the origin; seconds until it's reached, or None."""
+    w = ToyWorld(ball_xy=ball, lazy=lazy)
+    for step in range(int(seconds / DT)):
+        cmd, dist, _ = steer_to(to_duck_frame(w.duck, w.yaw, w.ball), p)
         if dist < p.catch_radius:
-            return step * dt
+            return step * DT
         assert abs(cmd[0]) <= p.max_forward + 1e-6 and abs(cmd[2]) <= p.max_turn + 1e-6
-        vx, wz = cmd[0], cmd[2]
-        if lazy:
-            vx, _, wz, walking = lazy_legs(cmd, walking)
-        yaw += wz * dt
-        pos += vx * dt * np.array([math.cos(yaw), math.sin(yaw)])
+        w.step(Action(cmd=cmd))
     return None
 
 
@@ -37,13 +32,13 @@ def simulate(ball, yaw0=0.0, seconds=30.0, dt=0.02, p=SteerParams(), lazy=False)
 @pytest.mark.parametrize("angle_deg", range(-180, 180, 30))
 def test_catches_ball_in_any_direction(angle_deg, lazy):
     a = math.radians(angle_deg)
-    t = simulate(np.array([math.cos(a), math.sin(a)]), lazy=lazy)
+    t = time_to_reach((math.cos(a), math.sin(a)), lazy=lazy)
     assert t is not None and t < (25.0 if lazy else 15.0)
 
 
 def test_ball_straight_ahead_is_quick():
     # 1 m at 0.3-0.4 m/s with slow-down near the ball: well under 8 s.
-    assert simulate(np.array([1.0, 0.0])) < 8.0
+    assert time_to_reach((1.0, 0.0)) < 8.0
 
 
 def test_never_commands_inside_the_dead_zone():
@@ -79,23 +74,17 @@ def test_frames():
 
 @pytest.mark.parametrize("lazy", [False, True])
 def test_chase_brain_reaches_the_ball_and_recovers_from_a_fall(lazy):
-    brain, dt = ChaseBrain(), 0.02
-    pos, yaw, walking, ball = np.zeros(2), 0.0, False, np.array([-0.8, 0.6])
-    for step in range(int(30 / dt)):
-        t = step * dt
-        fallen = 1.0 <= t < 2.0                # knocked over for a second early on
-        act = brain.update(Snapshot(t, pos.copy(), yaw, ball, 0.0, fallen, False))
-        if fallen:
+    brain, w = ChaseBrain(), ToyWorld(ball_xy=(-0.8, 0.6), lazy=lazy)
+    while w.t < 30:
+        w.fallen = 1.0 <= w.t < 2.0          # knocked over for a second early on
+        act = brain.update(w.snapshot())
+        if w.fallen:
             assert brain.state == "RECOVER" and not act.cmd.any()
-            continue
-        assert brain.state == "CHASE"
-        if np.linalg.norm(ball - pos) < SteerParams().catch_radius:
+        else:
+            assert brain.state == "CHASE"
+        if np.linalg.norm(w.ball - w.duck) < SteerParams().catch_radius:
             break
-        vx, _, wz = act.cmd
-        if lazy:
-            vx, _, wz, walking = lazy_legs(act.cmd, walking)
-        yaw += wz * dt
-        pos += vx * dt * np.array([math.cos(yaw), math.sin(yaw)])
+        w.step(act)
     else:
         pytest.fail("never reached the ball")
     assert "back up" in brain.last_change

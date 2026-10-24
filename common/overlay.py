@@ -21,7 +21,6 @@ WHITE = (1.0, 1.0, 1.0, 0.9)     # the duck: where it's actually going, where it
 PINK = (1.0, 0.3, 0.85, 0.95)    # the command sent to the legs
 CYAN = (0.3, 1.0, 1.0, 0.9)      # the brain's plan: the route it means to walk
 YELLOW = (1.0, 0.85, 0.1, 0.95)  # the ball: where the next kick should send it, where it's been
-ORANGE = (1.0, 0.5, 0.0, 0.95)   # ...the same when the aim is "back towards the middle"
 GREEN = (0.2, 0.95, 0.3, 0.6)    # goal zones: catch radius, kick spot with the ball on it
 RED = (1.0, 0.25, 0.2, 0.5)      # kick spot without the ball on it
 FAINT = (1.0, 1.0, 1.0, 0.3)     # the playing area
@@ -62,18 +61,6 @@ def disc(scn, xy, radius, rgba, z=Z_ZONE):
     if g is not None:
         mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_CYLINDER, np.array([radius, radius, 0.001]),
                             np.array([xy[0], xy[1], z]), _EYE3, np.asarray(rgba, np.float32))
-
-
-def sphere(scn, xyz, radius, rgba):
-    g = _add(scn)
-    if g is not None:
-        mujoco.mjv_initGeom(g, mujoco.mjtGeom.mjGEOM_SPHERE, np.array([radius, 0, 0]),
-                            np.asarray(xyz, float), _EYE3, np.asarray(rgba, np.float32))
-
-
-def circle(scn, centre, radius, rgba=FAINT, width=2.0, z=Z_AREA, n=48):
-    a = np.linspace(0, 2 * math.pi, n + 1)
-    polyline(scn, np.c_[centre[0] + radius * np.cos(a), centre[1] + radius * np.sin(a)], rgba, width, z)
 
 
 def head(scn, tip_xy, direction, rgba, width=WIDTH, z=Z_PLAN, size=HEAD):

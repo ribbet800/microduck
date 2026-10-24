@@ -1,18 +1,15 @@
-"""The kick loop's brain: walk up to the ball, kick it, follow it, kick it again.
+"""Kickback's brain: kick the ball back and forth along a straight line.
 
-Pollen's kick policy is BLIND — it never sees the ball. It was trained starting
+Every kick aims back the way the last one went, at the end of the line behind
+it (the first kick: away from the duck). The aim points at that end from
+wherever the ball stopped, so a ball that drifted off the line is sent back
+towards it.
+
+Pollen's kick policy is BLIND: it never sees the ball. It was trained starting
 from a still stand with the ball centred 9 cm in front of the trunk and 4.2 cm
 to the side (in front of the kicking foot), give or take 1.5 cm, and it kicks
 straight ahead. So where the ball goes is decided by which way the duck faces
 when it kicks, and all the skill is in lining up.
-
-Each time the ball comes to rest, the brain picks a new random aim:
-  - inside the arena (within `arena_radius` of the origin): a direction between
-    "onwards" (from the duck to the ball, so the duck rarely has to walk round
-    it) and "back towards the middle", leaning further towards the middle the
-    further out the ball is (`centre_bias`), give or take up to `aim_spread`.
-  - outside it: back towards the origin, give or take up to `home_spread`.
-    A soft wall: the ball is never teleported.
 
     APPROACH  get behind the ball on the aim line, facing along it: if the
               straight way passes too close to the ball, orbit it at a safe
@@ -22,15 +19,12 @@ Each time the ball comes to rest, the brain picks a new random aim:
               the kick spot. (Pollen's walking policy can't shuffle: it ignores
               small, sideways and backward commands. Overshoot = start again.)
     SETTLE    stand still for a second (the kick was trained from a still stand)
-    KICK      swap to the kick policy for ~3 s, then back to walking
+    KICK      run the kick skill for ~3 s, then back to walking
     WATCH     wait for the ball to stop, record where it went against where it
-              was aimed, pick the next aim
+              was aimed, aim the next kick
     RECOVER   fell over: zero command while the walking policy gets up
 
 docs/how_it_works.md draws this as a diagram, with every transition.
-
-No MuJoCo in here: `update` takes a snapshot of the world and returns what to
-do, so it can be tested against an imaginary duck (tests/test_kick_brain.py).
 """
 
 from __future__ import annotations
@@ -58,13 +52,7 @@ def _on_circle(centre, radius, angle):
 
 
 @dataclass
-class KickParams:
-    # Aiming: random, roughly onwards, inside a soft arena.
-    aim_spread: float = math.radians(60)   # aim = the base direction ± up to this
-    arena_radius: float = 1.5              # soft arena round the origin (m)
-    centre_bias: float = 1.0               # base direction: onwards, blended towards the middle by
-                                           # this x (ball's distance out / arena_radius); 0 = onwards
-    home_spread: float = math.radians(45)  # outside it: aim back home ± up to this
+class KickbackParams:
     moved: float = 0.05                    # ball knocked this far since aiming (m): aim again
     # Where the kick policy expects the ball (microduck_ball_kick_env_cfg.py:
     # BALL_OFFSET_X / BALL_OFFSET_ABS_Y, trained with ±1.5 cm noise).
@@ -101,58 +89,49 @@ class KickParams:
     got_away: float = 0.12               # further than standoff + this from the stance: approach again
     # Kick and after
     settle_s: float = 1.0
-    kick_start_s: float = 0.5            # the kick policy hasn't taken over by then: give up on it
+    kick_start_s: float = 0.5            # the kick skill hasn't taken over by then: give up on it
     watch_s: float = 6.0                 # watch the ball at most this long...
     watch_min_s: float = 0.5             # ...and at least this long (it may not be rolling yet)
     ball_stopped: float = 0.05           # m/s
     attempt_timeout_s: float = 45.0      # counted from when the duck gets within near_ball
     near_ball: float = 0.6
-    # Assist: if the duck gets within `assist_radius` but can't nail the spot,
-    # nudge the ball into place (what Pollen's own demo does every time).
-    assist: bool = False
-    assist_radius: float = 0.05
 
 
-class KickBrain(Brain):
-    def __init__(self, params: KickParams, feet: list[str], rng: np.random.Generator | None = None):
-        assert feet, "need at least one kick policy"
+class KickbackBrain(Brain):
+    """`ends`: the line's two ends (world x, y). `feet`: which feet it may kick
+    with ("left" / "right"); each needs its skill ("kick_left" / "kick_right") loaded."""
+
+    def __init__(self, ends, params: KickbackParams = KickbackParams(), feet=("left", "right")):
         super().__init__("APPROACH")
+        self.ends = [np.asarray(e, float) for e in ends]
         self.p = params
-        self.feet = feet
-        self.rng = rng if rng is not None else np.random.default_rng(0)
+        self.feet = list(feet)
+        self.foot = self.feet[0]
         self.attempt_t0 = 0.0
-        self.foot = feet[0]
         self.events = {"kicks": [], "retries": [], "orbits": [], "timeouts": []}
         self._kick_started = False
         self._kick_peak = 0.0
         self._lined_up_t0 = None
         self._orbit_dir = 0.0            # +1 anticlockwise round the ball, -1 clockwise, 0 not orbiting
-        # The current aim: a unit vector, where the ball was when it was picked,
-        # and whether it was a free pick or a "come home" one.
+        # The current aim (a unit vector) and where the ball was when it was picked.
         self.aim = None
         self.aim_from = None
-        self.aim_mode = ""
         # Line-up errors, for the status panel and log.csv:
         self.align_err = float("nan")
         self.heading_err = float("nan")
 
     # -- aiming -----------------------------------------------------------------
     def pick_aim(self, s: Snapshot):
-        """Choose where the next kick should send the ball."""
-        p, ball = self.p, np.asarray(s.ball_xy, float)
-        out = float(np.linalg.norm(ball))
-        if out > p.arena_radius:
-            base, spread, self.aim_mode = math.atan2(-ball[1], -ball[0]), p.home_spread, "home"
+        """Aim at the end of the line behind the last kick (first kick: away from the duck)."""
+        ball = np.asarray(s.ball_xy, float)
+        if self.events["kicks"]:
+            back = -np.asarray(self.events["kicks"][-1]["aim"])
         else:
-            onwards = ball - np.asarray(s.duck_xy, float)
-            onwards /= max(float(np.linalg.norm(onwards)), 1e-9)
-            home = -ball / max(out, 1e-9)
-            w = min(1.0, p.centre_bias * out / p.arena_radius)
-            d = (1 - w) * onwards + w * home        # (if they cancel out, atan2(0, 0) = 0: any way is fine)
-            base, spread, self.aim_mode = math.atan2(d[1], d[0]), p.aim_spread, "free"
-        ang = base + self.rng.uniform(-spread, spread)
-        self.aim = np.array([math.cos(ang), math.sin(ang)])
-        self.aim_from = ball.copy()
+            back = ball - np.asarray(s.duck_xy, float)
+        end = max(self.ends, key=lambda e: float(np.dot(e - ball, back)))
+        d = end - ball
+        self.aim = d / max(float(np.linalg.norm(d)), 1e-9)
+        self.aim_from = ball
 
     @property
     def aim_deg(self):
@@ -183,7 +162,7 @@ class KickBrain(Brain):
 
         # Falls trump everything. (The game loop records them: common/game.py.)
         if s.fallen and self.state != "RECOVER":
-            act.stop_kick = s.kicking
+            act.stop_skill = s.skill is not None
             self.set_state("RECOVER", s.t, "fell over")
             return act
         if self.state == "RECOVER":
@@ -204,7 +183,7 @@ class KickBrain(Brain):
             self.events["timeouts"].append({"t": s.t})
             if self.state == "WATCH":
                 self._finish_kick(s)
-            return self._new_attempt(s, "taking too long, aiming somewhere else")
+            return self._new_attempt(s, "taking too long, starting over")
         # Knocked the ball (not with a kick)? Once it's still again, aim afresh from there.
         if (self.state in ("APPROACH", "ALIGN", "SETTLE") and s.ball_speed < p.ball_stopped
                 and np.linalg.norm(s.ball_xy - self.aim_from) > p.moved):
@@ -217,7 +196,7 @@ class KickBrain(Brain):
         elif self.state == "SETTLE":
             act = self._settle(s, dt_state)
         elif self.state == "KICK":
-            if s.kicking:
+            if s.skill is not None:
                 self._kick_started = True
             elif self._kick_started:
                 self.set_state("WATCH", s.t, "kick done")
@@ -235,8 +214,7 @@ class KickBrain(Brain):
         self.pick_aim(s)
         self.attempt_t0 = s.t
         self._orbit_dir = 0.0
-        self.set_state("APPROACH", s.t, f"{why}; next aim {self.aim_deg:+.0f}°"
-                       + (" (back towards the middle)" if self.aim_mode == "home" else ""))
+        self.set_state("APPROACH", s.t, f"{why}; next aim {self.aim_deg:+.0f}°")
         return Action()
 
     def _finish_kick(self, s):
@@ -305,10 +283,6 @@ class KickBrain(Brain):
         self.align_err, self.heading_err = float(np.linalg.norm(e)), h
         return e, h
 
-    def _assist_ok(self, err, h):
-        """Close enough for the assist to nudge the ball the rest of the way."""
-        return self.p.assist and err < self.p.assist_radius and abs(h) < 3 * self.p.heading_tol
-
     def _align(self, s: Snapshot, dt_state):
         p, act = self.p, Action()
         e, h = self._errors(s)
@@ -342,9 +316,6 @@ class KickBrain(Brain):
                 self.set_state("SETTLE", s.t, f"lined up ({err * 1000:.0f} mm off)")
             return act
         self._lined_up_t0 = None
-        if self._assist_ok(err, h) and walked_in:
-            self.set_state("SETTLE", s.t, f"close enough for an assist ({err * 1000:.0f} mm off)")
-            return act
         if dt_state > p.align_timeout_s:
             return self._retry(s, err, "couldn't line up, trying again")
         # Steer like a car onto the line: aim off the kick direction, towards
@@ -384,55 +355,23 @@ class KickBrain(Brain):
         if dt_state < p.settle_s:
             return act
         err = float(np.linalg.norm(e))
-        assisted = False
         # Heading gets a little more slack here (1.5x) than for "lined up":
         # a few degrees of drift while standing is fine.
         if err > p.tolerance or abs(h) > 1.5 * p.heading_tol:
-            if self._assist_ok(err, h):
-                act.place_ball = tuple(self.spot_world(s.duck_xy, s.duck_yaw))
-                assisted = True
-            else:
-                self.set_state("ALIGN", s.t, f"drifted to {err * 1000:.0f} mm while settling")
-                return act
-        act.kick = self.foot
+            self.set_state("ALIGN", s.t, f"drifted to {err * 1000:.0f} mm while settling")
+            return act
+        act.skill = f"kick_{self.foot}"
         self._kick_started = False
         self._kick_peak = 0.0
         rel = to_duck_frame(s.duck_xy, s.duck_yaw, s.ball_xy)
-        ball_xy = [float(v) for v in (act.place_ball or s.ball_xy)]
+        ball_xy = [float(v) for v in s.ball_xy]
         self.aim_from = np.array(ball_xy)
         self.events["kicks"].append({
-            "t": s.t, "foot": self.foot, "assisted": assisted,
+            "t": s.t, "foot": self.foot,
             "ball_rel": [round(float(v), 4) for v in rel],
             "err_m": round(err, 4), "heading_err_deg": round(math.degrees(h), 1),
             "ball_xy": ball_xy,
-            "aim": [float(v) for v in self.aim], "aim_deg": round(self.aim_deg, 1), "aim_mode": self.aim_mode,
+            "aim": [float(v) for v in self.aim], "aim_deg": round(self.aim_deg, 1),
         })
-        self.set_state("KICK", s.t, f"{self.foot} foot, aiming {self.aim_deg:+.0f}°, "
-                       + ("assisted" if assisted else f"{err * 1000:.0f} mm off"))
+        self.set_state("KICK", s.t, f"{self.foot} foot, aiming {self.aim_deg:+.0f}°, {err * 1000:.0f} mm off")
         return act
-
-
-class KickbackBrain(KickBrain):
-    """The same brain, kicking the ball back and forth along a straight line.
-
-    Every kick aims back the way the last one went: at the end of the line
-    behind the last kick's direction (the first kick: away from the duck). The
-    aim points at that end from wherever the ball stopped, so a ball that drifted
-    off the line is sent back towards it (aim_mode "line"). Everything else is
-    KickBrain's.
-    """
-
-    def __init__(self, params: KickParams, feet: list[str], ends):
-        super().__init__(params, feet)
-        self.ends = [np.asarray(e, float) for e in ends]
-
-    def pick_aim(self, s: Snapshot):
-        ball = np.asarray(s.ball_xy, float)
-        if self.events["kicks"]:
-            back = -np.asarray(self.events["kicks"][-1]["aim"])
-        else:
-            back = ball - np.asarray(s.duck_xy, float)
-        end = max(self.ends, key=lambda e: float(np.dot(e - ball, back)))
-        d = end - ball
-        self.aim = d / max(float(np.linalg.norm(d)), 1e-9)
-        self.aim_from, self.aim_mode = ball, "line"

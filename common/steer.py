@@ -3,7 +3,7 @@
 Pollen's walking policy is the "legs": it turns a velocity command
 (forward speed, sideways speed, turn rate) into motor targets. `steer_to`
 decides WHAT command to send to get somewhere. The chase brain steers at the
-ball with it; the kick brain steers at a point behind the ball.
+ball with it; the kickback brain steers at a point behind the ball.
 
 No MuJoCo here, so brains built on it can be tested without the sim.
 """
@@ -35,6 +35,12 @@ class SteerParams:
     slow_radius: float = 0.35
     # Within this distance (m) the target counts as "reached": stop.
     catch_radius: float = 0.13
+
+
+def yaw_from_quat(q) -> float:
+    """Heading (rad) from a MuJoCo [w, x, y, z] quaternion."""
+    w, x, y, z = q
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 
 def to_duck_frame(duck_xy, duck_yaw, xy):

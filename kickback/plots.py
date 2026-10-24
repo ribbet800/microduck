@@ -1,4 +1,4 @@
-"""After-the-run pictures for the kick loop."""
+"""After-the-run pictures for kickback."""
 
 from __future__ import annotations
 
@@ -9,29 +9,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Circle, Rectangle
 
-from kick.brain import WHIFF_SPEED
+from kickback.brain import WHIFF_SPEED
 
 STATE_ORDER = ["APPROACH", "ALIGN", "SETTLE", "KICK", "WATCH", "RECOVER"]
 STATE_COLOURS = {"APPROACH": "#4C78A8", "ALIGN": "#F2CF5B", "SETTLE": "#E8A33D",
                  "KICK": "#D9534F", "WATCH": "#B5B5B5", "RECOVER": "#7B3F99"}
 
 
-def _arena(ax, p):
-    ax.add_patch(Circle((0, 0), p.arena_radius, fill=False, ec="0.6", ls="--", lw=1, zorder=0))
-    ax.plot(0, 0, "+", color="0.6", ms=10, zorder=0)
-
-
-def topdown(log, events, p, path, line=None):
-    """Bird's-eye view: duck path, ball path, and every kick as two arrows from
-    where the ball was: where it was aimed (grey) and where it actually went
-    (coloured by ball speed), both as long as the ball travelled.
-    `line`: the two ends of kickback's line, drawn instead of the arena."""
+def topdown(log, events, ends, path):
+    """Bird's-eye view: the line, duck path, ball path, and every kick as two
+    arrows from where the ball was: where it was aimed (grey) and where it
+    actually went (coloured by ball speed), both as long as the ball travelled."""
     fig, ax = plt.subplots(figsize=(9, 8))
-    if line is None:
-        _arena(ax, p)
-    else:
-        (x0, y0), (x1, y1) = line
-        ax.plot([x0, x1], [y0, y1], "o--", color="0.6", lw=1, ms=8, mfc="none", zorder=0)
+    (x0, y0), (x1, y1) = ends
+    ax.plot([x0, x1], [y0, y1], "o--", color="0.6", lw=1, ms=8, mfc="none", zorder=0)
     ax.plot(log["duck_x"], log["duck_y"], color="0.35", lw=0.8, label="duck path", zorder=2)
     ax.plot(log["ball_x"], log["ball_y"], color="tab:orange", lw=0.8, alpha=0.8, label="ball path", zorder=2)
 
@@ -52,10 +43,6 @@ def topdown(log, events, p, path, line=None):
         for i, k in enumerate(kicks):
             ax.annotate(str(i + 1), k["ball_xy"], textcoords="offset points", xytext=(-9, 5), fontsize=8)
         ax.plot([], [], color="0.55", lw=2, label="aimed")
-        assisted = [k for k in kicks if k["assisted"]]
-        if assisted:
-            ax.scatter([k["ball_xy"][0] for k in assisted], [k["ball_xy"][1] for k in assisted],
-                       s=80, facecolors="none", edgecolors="tab:purple", lw=1.5, zorder=5, label="assisted kick")
     if events["falls"]:
         ax.scatter([f["x"] for f in events["falls"]], [f["y"] for f in events["falls"]],
                    marker="x", color="tab:red", s=70, lw=2.5, zorder=5, label="fell over")
@@ -64,8 +51,8 @@ def topdown(log, events, p, path, line=None):
     ax.margins(0.1)
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
-    ax.set_title(f"Kick loop from above — {len(events['kicks'])} kicks\n"
-                 "grey arrow = where it was aimed, coloured arrow = where the ball went; dashed = soft arena")
+    ax.set_title(f"Kickback from above — {len(events['kicks'])} kicks\n"
+                 "grey arrow = where it was aimed, coloured arrow = where the ball went; dashed = the line")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.08), ncol=5, fontsize=8, frameon=False)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
@@ -91,13 +78,12 @@ def aiming(events, path):
 
     ax = axes[1]
     if kicks:
-        colours = ["tab:purple" if k["assisted"] else "tab:blue" for k in kicks]
         ax.scatter([1000 * k["err_m"] for k in kicks], [k["aim_err_deg"] for k in kicks],
-                   c=colours, s=40, edgecolors="k", lw=0.5)
+                   color="tab:blue", s=40, edgecolors="k", lw=0.5)
     ax.axhline(0, color="k", lw=1)
     ax.set_xlabel("line-up error at kick (mm)")
     ax.set_ylabel("direction error (°)")
-    ax.set_title("Does a sloppier line-up send it off course?\n(purple = assisted)")
+    ax.set_title("Does a sloppier line-up send it off course?")
     ax.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
@@ -126,9 +112,6 @@ def alignment(events, p, path):
         sc = ax.scatter(x, y, c=speeds, cmap="plasma", vmin=0, vmax=max(1.2, np.nanmax(speeds + [0])),
                         s=45, edgecolors="k", lw=0.6, zorder=3)
         fig.colorbar(sc, ax=ax, label="ball speed after kick (m/s)", shrink=0.85)
-        for k in kicks:
-            if k["assisted"]:
-                ax.scatter(*k["ball_rel"], s=110, facecolors="none", edgecolors="tab:purple", lw=1.5, zorder=4)
     ax.set_aspect("equal")
     ax.set_xlim(-0.06, 0.16)
     ax.set_ylim(-0.1, 0.1)
@@ -141,13 +124,12 @@ def alignment(events, p, path):
     ax = axes[1]
     errs = [1000 * k["err_m"] for k in kicks]
     if kicks:
-        colours = ["tab:purple" if k["assisted"] else "tab:blue" for k in kicks]
-        ax.scatter(errs, speeds, c=colours, s=40, edgecolors="k", lw=0.5)
+        ax.scatter(errs, speeds, color="tab:blue", s=40, edgecolors="k", lw=0.5)
     ax.axvline(1000 * p.tolerance, color="tab:green", ls="--", lw=1, label="tolerance")
     ax.axhline(WHIFF_SPEED, color="tab:red", ls=":", lw=1, label="below this = whiff")
     ax.set_xlabel("line-up error at kick (mm)")
     ax.set_ylabel("ball speed after kick (m/s)")
-    ax.set_title("Does precision matter?\n(purple = assisted)")
+    ax.set_title("Does precision matter?")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     fig.tight_layout()
