@@ -300,6 +300,14 @@ KEY_SPACE, KEY_RIGHT, KEY_MINUS, KEY_EQUAL, KEY_PAD_MINUS, KEY_PAD_PLUS = 32, 26
 KEYS_HINT = "space pause, right arrow step, - + speed"
 
 
+def _panel(text: str) -> str:
+    """MuJoCo's on-screen font only has plain ASCII (anything else draws as boxes):
+    spell out the symbols our status lines use, and drop any other."""
+    for symbol, plain in (("°", " deg"), ("±", "+/-"), ("—", "-"), ("→", "->"), ("×", "x")):
+        text = text.replace(symbol, plain)
+    return text.encode("ascii", "ignore").decode()
+
+
 def run_live(duck: Duck, game, speed: float = 1.0):
     """Run the game in MuJoCo's viewer, `speed` x real time (keys change it)."""
     import mujoco
@@ -352,9 +360,9 @@ def run_live(duck: Duck, game, speed: float = 1.0):
             rows = game.status() + [("speed", "paused" if ctl["paused"] else shown), ("keys", KEYS_HINT)]
             legend = game.legend
             viewer.set_texts([(None, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                               "\n".join(r[0] for r in rows), "\n".join(r[1] for r in rows)),
+                               _panel("\n".join(r[0] for r in rows)), _panel("\n".join(r[1] for r in rows))),
                               (None, mujoco.mjtGridPos.mjGRID_BOTTOMLEFT,
-                               "\n".join(r[0] for r in legend), "\n".join(r[1] for r in legend))])
+                               _panel("\n".join(r[0] for r in legend)), _panel("\n".join(r[1] for r in legend)))])
             viewer.sync()
             time.sleep(max(0.0, frame_dt - (time.perf_counter() - t0)))
 
