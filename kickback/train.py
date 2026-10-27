@@ -27,6 +27,7 @@ import argparse
 import math
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import gymnasium as gym
@@ -43,9 +44,8 @@ from common.brain import DECIDE_EVERY, MAX_FORWARD, MAX_TURN  # noqa: E402
 from common.duck import REPO, hub_policy, load_duck, find_rl_repo  # noqa: E402
 from common.steer import wrap  # noqa: E402
 from common.toy import DT, KICK_REACH, ToyWorld  # noqa: E402
-from dataclasses import replace  # noqa: E402
-
-from common.training import TrainingLog, film_in_mujoco, progress_video, trace_frame, write_report  # noqa: E402
+from common.training import (TrainingLog, export_onnx, film_in_mujoco, progress_video, trace_frame,  # noqa: E402
+                             write_report)
 from kickback.brain import OBS_SIZE, TRAIN_MARGIN, KickbackBrain, KickbackParams, LearnedKickbackBrain, observe  # noqa: E402
 from kickback.game import KICK_SECONDS, Kickback  # noqa: E402
 
@@ -151,8 +151,7 @@ def toy_kickback(brain, start, seconds, trace=None):
     Returns (kicks, knocks); appends `trace_frame`s to `trace`."""
     (x, y), yaw = start
     brain.quiet = True
-    w = ToyWorld(duck_xy=(x, y), yaw=yaw, lazy=True, kick_noise=0.05,
-                 skill_seconds={"kick_left": KICK_SECONDS, "kick_right": KICK_SECONDS})
+    w = ToyWorld(duck_xy=(x, y), yaw=yaw, lazy=True, kick_noise=0.05)
     for _ in range(int(round(seconds / DT))):
         w.step(brain.update(w.snapshot()))
         if trace is not None:
@@ -176,22 +175,6 @@ def kicks_per_min(make_brain):
         kicks, knocks = kicks + k, knocks + n
     minutes = len(starts) * SCORE_S / 60
     return kicks / minutes, knocks / minutes
-
-
-class _Actor(torch.nn.Module):
-    """The policy's deterministic action (its mean), for export."""
-
-    def __init__(self, policy):
-        super().__init__()
-        self.policy = policy
-
-    def forward(self, obs):
-        return self.policy.get_distribution(obs).distribution.mean
-
-
-def export_onnx(model, path: Path):
-    torch.onnx.export(_Actor(model.policy).eval(), torch.zeros(1, OBS_SIZE), str(path),
-                      input_names=["obs"], output_names=["action"], dynamo=False)
 
 
 def main():
@@ -220,7 +203,7 @@ def main():
         # Checkpoint: export, score it as the game will run it, film the game's start.
         n = model.num_timesteps
         path = out / "checkpoints" / f"brain_{n:07d}.onnx"
-        export_onnx(model, path)
+        export_onnx(model, path, OBS_SIZE)
         score, knocks = kicks_per_min(lambda: LearnedKickbackBrain(ends, path))
         checkpoints.append({"decisions": n, "score": score, "knocks": knocks, "file": str(path.relative_to(out))})
         frames = []
@@ -242,7 +225,7 @@ def main():
     train_minutes = (time.time() - t0) / 60
 
     model.save(out / "ppo.zip")
-    export_onnx(model, out / "brain.onnx")
+    export_onnx(model, out / "brain.onnx", OBS_SIZE)
     print("Making the toy-world progress video...")
     progress_video(out / "progress.mp4", clips, ring=0, lines=[ENDS], centre=(0.0, 0.0), extent=1.2)
 

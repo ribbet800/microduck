@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chase: a duck that chases a ball. No training needed.
+"""Chase: a duck that chases a ball.
 
 Pollen's trained walking policy ("the legs") runs exactly as it does in their
 `infer_policy.py` rehearsal script — same BAM servo model, same 61-D
@@ -14,6 +14,9 @@ ball, the ball jumps somewhere new and the chase starts again.
 
   Headless (fast, saves plots + optional video to runs/chase_<time>/):
       uv run chase/game.py --headless --duration 90 --video
+
+  Learned (a network trained by chase/train.py instead of the hand-written brain):
+      uv run chase/game.py --brain runs/chase_learned/brain.onnx
 
 In the live viewer you can mess with the ball: double-click it to select,
 then Ctrl + right-drag to shove it around.
@@ -32,7 +35,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # so `uv run chase/game.py` finds the packages
 
 from chase import plots  # noqa: E402
-from chase.brain import ChaseBrain, LearnedBrain  # noqa: E402
+from chase.brain import ChaseBrain, LearnedChaseBrain  # noqa: E402
 from common import overlay, run  # noqa: E402
 from common.brain import Snapshot  # noqa: E402
 from common.duck import Duck  # noqa: E402
@@ -122,7 +125,7 @@ def main():
     args = ap.parse_args()
 
     duck = run.duck_from_args(args)
-    brain = LearnedBrain(args.brain) if args.brain else ChaseBrain()
+    brain = LearnedChaseBrain(args.brain) if args.brain else ChaseBrain()
     run.play(Chase(duck, brain, rng=np.random.default_rng(args.seed)), args)
 
 

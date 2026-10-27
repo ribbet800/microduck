@@ -102,7 +102,7 @@ def test_learned_brain_sees_the_ball_in_its_own_frame():
 
 
 def test_learned_brain_commands_stay_in_the_trained_ranges():
-    from chase.brain import MAX_FORWARD, MAX_TURN, to_command
+    from common.brain import MAX_FORWARD, MAX_TURN, to_command
     assert to_command([-1, 0]) == pytest.approx([0.0, 0.0, 0.0])
     assert to_command([1, 1]) == pytest.approx([MAX_FORWARD, 0.0, MAX_TURN])
     assert to_command([5, -5]) == pytest.approx([MAX_FORWARD, 0.0, -MAX_TURN])   # clipped

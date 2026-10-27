@@ -1,7 +1,7 @@
 """What every training run saves: a log of how PPO went, progress videos, and an HTML report.
 
 A training script (e.g. chase/train.py) passes `TrainingLog()` as the callback
-to `model.learn`, scores a checkpoint brain every so often, records a toy-world
+to `model.learn`, exports a checkpoint brain every so often (`export_onnx`), scores it, records a toy-world
 episode of each checkpoint with `trace_frame`, then calls `progress_video`,
 `film_in_mujoco` (the same checkpoints playing the real game) and `write_report`.
 Everything lands in the run's folder:
@@ -30,6 +30,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from stable_baselines3.common.callbacks import BaseCallback
 
 # What PPO reports after each update, and what to call it.
@@ -58,6 +59,24 @@ class TrainingLog(BaseCallback):
 
     def _on_step(self):
         return True
+
+
+class _Actor(torch.nn.Module):
+    """The policy's deterministic action (its mean), for export."""
+
+    def __init__(self, policy):
+        super().__init__()
+        self.policy = policy
+
+    def forward(self, obs):
+        return self.policy.get_distribution(obs).distribution.mean
+
+
+def export_onnx(model, path, obs_size):
+    """The PPO policy as an ONNX file: `obs_size` numbers in, its two outputs out
+    (what common/brain.py: Network runs)."""
+    torch.onnx.export(_Actor(model.policy).eval(), torch.zeros(1, obs_size), str(path),
+                      input_names=["obs"], output_names=["action"], dynamo=False)
 
 
 def trace_frame(world) -> tuple:

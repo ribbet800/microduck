@@ -4,7 +4,7 @@
     RECOVER   fell over: zero command while the walking policy gets up
 
 `ChaseBrain` steers with common/steer.py (~20 lines of geometry).
-`LearnedBrain` asks a small network trained by chase/train.py instead; what
+`LearnedChaseBrain` asks a small network trained by chase/train.py instead; what
 it sees (`observe`) and how its output becomes a command (`to_command`, in
 common/brain.py) are defined once, so training and playing can't disagree.
 
@@ -54,7 +54,7 @@ class ChaseBrain(Brain):
         return cmd
 
 
-class LearnedBrain(ChaseBrain):
+class LearnedChaseBrain(ChaseBrain):
     """Chases with a network exported by chase/train.py (an ONNX file)."""
 
     def __init__(self, onnx_path: str):

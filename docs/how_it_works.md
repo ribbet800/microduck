@@ -64,7 +64,7 @@ In CHASE the hand-written `ChaseBrain` gets its command from
 facing it, slow down near it, and never send a forward command the walking
 policy would ignore (below 0.3 m/s).
 
-`LearnedBrain` (`--brain file.onnx`) has the same two states, but in CHASE a
+`LearnedChaseBrain` (`--brain file.onnx`) has the same two states, but in CHASE a
 small network picks the command instead, 10 times a second:
 
 ```mermaid
@@ -131,6 +131,13 @@ Inside ALIGN the brain does one of: turn on the spot (facing over 15° off),
 walk in along the line steering like a car, or give up and retry. The real
 walking policy can't sidestep, walk backwards or take tiny steps, so retrying
 is the only way to fix a small miss.
+
+`LearnedKickbackBrain` (`--brain file.onnx`) swaps APPROACH + ALIGN for a small
+network trained by `kickback/train.py`: in APPROACH it walks wherever the
+network says, 10 times a second, and stops by itself once the ball is within
+15 mm of the kick spot and it faces the aim within 8°. After 0.3 s like that,
+the same SETTLE / KICK / WATCH take over; anything that would go to ALIGN goes
+back to APPROACH instead.
 
 ### Getting behind the ball: the orbit
 

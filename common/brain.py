@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import onnxruntime as ort
 
 
 @dataclass
@@ -85,7 +86,6 @@ class Network:
     """A trained network exported to ONNX: observation in, the two outputs out."""
 
     def __init__(self, onnx_path):
-        import onnxruntime as ort   # here, so the hand-written brains and the tests don't need it
         self.path = str(onnx_path)
         self.session = ort.InferenceSession(self.path)
         self.input = self.session.get_inputs()[0].name

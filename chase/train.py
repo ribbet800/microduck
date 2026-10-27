@@ -25,18 +25,18 @@ from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
-import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # so `uv run chase/train.py` finds the packages
 
-from chase.brain import OBS_SIZE, ChaseBrain, LearnedBrain, observe  # noqa: E402
+from chase.brain import OBS_SIZE, ChaseBrain, LearnedChaseBrain, observe  # noqa: E402
 from chase.game import CATCH_RADIUS, SPAWN_R, Chase  # noqa: E402
 from common.brain import DECIDE_EVERY, MAX_FORWARD, MAX_TURN, Action, to_command  # noqa: E402
 from common.duck import REPO, find_rl_repo, hub_policy, load_duck  # noqa: E402
 from common.toy import DT, ToyWorld  # noqa: E402
-from common.training import TrainingLog, film_in_mujoco, progress_video, trace_frame, write_report  # noqa: E402
+from common.training import (TrainingLog, export_onnx, film_in_mujoco, progress_video, trace_frame,  # noqa: E402
+                             write_report)
 
 EPISODE_S = 30.0
 EPISODE_DECISIONS = round(EPISODE_S / (DECIDE_EVERY * DT))
@@ -104,22 +104,6 @@ def balls_per_min(make_brain, episodes=20, seed=1000):
     return sum(toy_chase(make_brain(), rng) for _ in range(episodes)) / (episodes * EPISODE_S / 60)
 
 
-class _Actor(torch.nn.Module):
-    """The policy's deterministic action (its mean), for export."""
-
-    def __init__(self, policy):
-        super().__init__()
-        self.policy = policy
-
-    def forward(self, obs):
-        return self.policy.get_distribution(obs).distribution.mean
-
-
-def export_onnx(model, path: Path):
-    torch.onnx.export(_Actor(model.policy).eval(), torch.zeros(1, OBS_SIZE), str(path),
-                      input_names=["obs"], output_names=["action"], dynamo=False)
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--steps", type=int, default=500_000, help="training decisions (0.1 s each)")
@@ -143,11 +127,11 @@ def main():
         # Checkpoint: export, score it as the game will run it, film one episode.
         n = model.num_timesteps
         path = out / "checkpoints" / f"brain_{n:07d}.onnx"
-        export_onnx(model, path)
-        score = balls_per_min(lambda: LearnedBrain(path))
+        export_onnx(model, path, OBS_SIZE)
+        score = balls_per_min(lambda: LearnedChaseBrain(path))
         checkpoints.append({"decisions": n, "score": score, "file": str(path.relative_to(out))})
         frames = []
-        caught = toy_chase(LearnedBrain(path), np.random.default_rng(7), seconds=20, trace=frames)
+        caught = toy_chase(LearnedChaseBrain(path), np.random.default_rng(7), seconds=20, trace=frames)
         clips.append((f"after {n:,} decisions: {caught} balls in 20 s", frames))
         print(f"{n:>10}  {score:9.1f}  {(time.time() - t0) / 60:7.1f}")
         if n >= args.steps:
@@ -156,7 +140,7 @@ def main():
 
     minutes = (time.time() - t0) / 60
     model.save(out / "ppo.zip")
-    export_onnx(model, out / "brain.onnx")
+    export_onnx(model, out / "brain.onnx", OBS_SIZE)
     print("Making the toy-world progress video...")
     progress_video(out / "progress.mp4", clips)
 
@@ -165,7 +149,7 @@ def main():
     walking = hub_policy("velstand.onnx")
 
     def make_game(brain_file):
-        brain = LearnedBrain(out / brain_file) if brain_file else ChaseBrain()
+        brain = LearnedChaseBrain(out / brain_file) if brain_file else ChaseBrain()
         brain.quiet = True
         return Chase(load_duck(find_rl_repo(), walking), brain, rng=np.random.default_rng(0))
 

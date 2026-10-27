@@ -88,7 +88,7 @@ common/                 shared by every behaviour
 └── overlay.py          3D markers and the one colour palette they share
 chase/                  one folder per behaviour:
 ├── game.py             rules, drawing, score, plots; the script you run
-├── brain.py            CHASE / RECOVER: hand-written (ChaseBrain) or learned (LearnedBrain)
+├── brain.py            CHASE / RECOVER: hand-written (ChaseBrain) or learned (LearnedChaseBrain)
 ├── train.py            trains the learned brain in the toy world
 └── plots.py
 kickback/

@@ -11,7 +11,7 @@ It speaks the same Snapshot -> Action interface as the real game loop
 
 Legs: perfect (move exactly as commanded) or `lazy`, like Pollen's walking
 policy measured in MuJoCo. Skills: the duck stands still while one runs
-(`skill_seconds`). Kicks are like Pollen's blind kick policy: the ball flies
+(SKILL_SECONDS). Kicks are like Pollen's blind kick policy: the ball flies
 straight ahead at 1 m/s only if it's on the kick spot. The ball rolls and slows down.
 The duck's feet are a rectangle: walk or turn into the ball and it gets pushed.
 """
@@ -74,8 +74,7 @@ def lazy_legs(cmd, walking):
 
 
 class ToyWorld:
-    def __init__(self, duck_xy=(0.0, 0.0), yaw=0.0, ball_xy=(1.0, 0.0), lazy=False, kick_noise=0.0, seed=0,
-                 skill_seconds=SKILL_SECONDS):
+    def __init__(self, duck_xy=(0.0, 0.0), yaw=0.0, ball_xy=(1.0, 0.0), lazy=False, kick_noise=0.0, seed=0):
         self.duck = np.array(duck_xy, float)
         self.yaw = float(yaw)
         self.ball = np.array(ball_xy, float)
@@ -83,7 +82,6 @@ class ToyWorld:
         self.lazy, self.walking = lazy, False
         self.kick_noise, self.rng = kick_noise, np.random.default_rng(seed)
         self.fallen = False              # set it to knock the duck over: commands are ignored
-        self.skill_seconds = skill_seconds
         self.skill, self.skill_left = None, 0.0
         self.t = 0.0
 
@@ -95,7 +93,7 @@ class ToyWorld:
         if act.stop_skill:
             self.skill = None
         if act.skill:
-            self.skill, self.skill_left = act.skill, self.skill_seconds[act.skill]
+            self.skill, self.skill_left = act.skill, SKILL_SECONDS[act.skill]
             rel = to_duck_frame(self.duck, self.yaw, self.ball)
             spot = KICK_SPOTS.get(act.skill)
             if spot is not None and np.linalg.norm(rel - spot) < KICK_REACH:     # foot connects
