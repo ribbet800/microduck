@@ -35,7 +35,7 @@ from chase.game import CATCH_RADIUS, SPAWN_R, Chase  # noqa: E402
 from common.brain import DECIDE_EVERY, MAX_FORWARD, MAX_TURN, Action, to_command  # noqa: E402
 from common.duck import REPO, find_rl_repo, hub_policy, load_duck  # noqa: E402
 from common.toy import DT, ToyWorld  # noqa: E402
-from common.training import (TrainingLog, export_onnx, film_in_mujoco, progress_video, trace_frame,  # noqa: E402
+from common.training import (TrainingLog, export_onnx, film_in_mujoco, progress_video, trace_frame, video_checkpoints,  # noqa: E402
                              write_report)
 
 EPISODE_S = 30.0
@@ -44,6 +44,7 @@ PROGRESS = 10.0       # reward per metre closer to the ball
 CATCH_BONUS = 10.0    # reward for reaching it (then a new ball drops)
 PPO_SETTINGS = dict(n_steps=512, batch_size=1024, gamma=0.99)   # x 8 envs: one update per 4096 decisions
 MUJOCO_S = 60.0       # each checkpoint's MuJoCo game
+VIDEO_BALLS, CLIP_S = 2, 40.0   # progress video: each checkpoint chases this many balls, for at most this long
 
 
 def spawn_ball(world, rng):
@@ -82,10 +83,10 @@ class ChaseEnv(gym.Env):
         return observe(w.snapshot(), self.cmd), reward, False, truncated, {"catches": self.catches}
 
 
-def toy_chase(brain, rng, seconds=EPISODE_S, trace=None, one_ball=False):
+def toy_chase(brain, rng, seconds=EPISODE_S, trace=None, balls=None):
     """One toy-world chase with `brain` (through the same Snapshot -> Action interface
     the real game uses). Returns balls reached; appends `trace_frame`s to `trace`.
-    `one_ball`: stop at the first ball reached (one attempt, for the progress video)."""
+    `balls`: stop once that many are reached (for the progress video)."""
     w = ToyWorld(yaw=rng.uniform(-math.pi, math.pi), lazy=True)
     spawn_ball(w, rng)
     catches = 0
@@ -95,7 +96,7 @@ def toy_chase(brain, rng, seconds=EPISODE_S, trace=None, one_ball=False):
             trace.append(trace_frame(w))
         if np.linalg.norm(w.ball - w.duck) < CATCH_RADIUS:
             catches += 1
-            if one_ball:
+            if catches == balls:
                 break
             spawn_ball(w, rng)
     return catches
@@ -107,6 +108,17 @@ def balls_per_min(make_brain, episodes=20, seed=1000):
     return sum(toy_chase(make_brain(), rng) for _ in range(episodes)) / (episodes * EPISODE_S / 60)
 
 
+def make_progress_video(out: Path):
+    """progress.mp4 from a run's saved checkpoints: a few of them, each chasing VIDEO_BALLS balls."""
+    print("Making the toy-world progress video...")
+    clips = []
+    for title, path in video_checkpoints(out):
+        frames = []
+        caught = toy_chase(LearnedChaseBrain(path), np.random.default_rng(7), CLIP_S, trace=frames, balls=VIDEO_BALLS)
+        clips.append((title, f"{caught} ball{'s' * (caught != 1)} in {frames[-1][0]:.1f} s", frames))
+    progress_video(out / "progress.mp4", clips)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--steps", type=int, default=500_000, help="training decisions (0.1 s each)")
@@ -114,8 +126,11 @@ def main():
     ap.add_argument("--out", type=str, default=str(REPO / "runs" / "chase_learned"))
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--mujoco-seconds", type=float, default=MUJOCO_S, help="how long each checkpoint plays in MuJoCo")
+    ap.add_argument("--remake-video", action="store_true", help="don't train: remake --out's progress.mp4 from its checkpoints")
     args = ap.parse_args()
     out = Path(args.out)
+    if args.remake_video:
+        return make_progress_video(out)
     (out / "checkpoints").mkdir(parents=True, exist_ok=True)
 
     baseline = balls_per_min(ChaseBrain)
@@ -123,20 +138,16 @@ def main():
 
     env = make_vec_env(ChaseEnv, n_envs=8, seed=args.seed)
     model = PPO("MlpPolicy", env, seed=args.seed, verbose=0, **PPO_SETTINGS)
-    log, checkpoints, clips, t0 = TrainingLog(), [], [], time.time()
+    log, checkpoints, t0 = TrainingLog(), [], time.time()
     print(f"{'decisions':>10}  {'balls/min':>9}  {'minutes':>7}")
     chunk = max(args.steps // args.checkpoints, 1)
     while True:
-        # Checkpoint: export, score it as the game will run it, film one episode.
+        # Checkpoint: export, score it as the game will run it.
         n = model.num_timesteps
         path = out / "checkpoints" / f"brain_{n:07d}.onnx"
         export_onnx(model, path, OBS_SIZE)
         score = balls_per_min(lambda: LearnedChaseBrain(path))
         checkpoints.append({"decisions": n, "score": score, "file": str(path.relative_to(out))})
-        frames = []
-        caught = toy_chase(LearnedChaseBrain(path), np.random.default_rng(7), seconds=20, trace=frames, one_ball=True)
-        clips.append((f"Checkpoint {len(checkpoints) - 1} / {args.checkpoints}: {n:,} decisions",
-                      f"reached the ball in {frames[-1][0]:.1f} s" if caught else "didn't reach it in 20 s", frames))
         print(f"{n:>10}  {score:9.1f}  {(time.time() - t0) / 60:7.1f}")
         if n >= args.steps:
             break
@@ -145,8 +156,7 @@ def main():
     minutes = (time.time() - t0) / 60
     model.save(out / "ppo.zip")
     export_onnx(model, out / "brain.onnx", OBS_SIZE)
-    print("Making the toy-world progress video...")
-    progress_video(out / "progress.mp4", clips)
+    make_progress_video(out)
 
     # The same checkpoints (and the hand-written brain, first) chasing in MuJoCo, same balls each.
     print(f"Playing each checkpoint in MuJoCo for {args.mujoco_seconds:g} s...")

@@ -7,7 +7,7 @@ episode of each checkpoint with `trace_frame`, then calls `progress_video`,
 Everything lands in the run's folder:
 
     report.html     aim, training, results, and how it does in MuJoCo (open this)
-    progress.mp4    each checkpoint's attempt in the toy world, early to late
+    progress.mp4    a few checkpoints, early to late, each having a couple of goes in the toy world
     mujoco.mp4      the same checkpoints in MuJoCo, with Pollen's policies as the legs
     checkpoints/    every checkpoint's brain.onnx, to watch any stage in MuJoCo
 
@@ -90,10 +90,26 @@ def _idle(frames, i, j, still=0.002):
     return float(np.max(np.abs(b - a))) < still
 
 
+VIDEO_CHECKPOINTS = 5   # how many of a run's checkpoints its progress video shows
+
+
+def video_checkpoints(out, n=VIDEO_CHECKPOINTS):
+    """`n` of a run's saved checkpoints (out/checkpoints/brain_<decisions>.onnx), evenly
+    spread from the first to the last: [(title, path)] for `progress_video`."""
+    files = sorted((out / "checkpoints").glob("brain_*.onnx"))
+    picks = sorted({round(i) for i in np.linspace(0, len(files) - 1, min(n, len(files)))})
+    last = max(int(files[-1].stem.split("_")[1]), 1)
+    titles = []
+    for k, i in enumerate(picks):
+        d = int(files[i].stem.split("_")[1])
+        titles.append((f"Checkpoint {k + 1} of {len(picks)}: {d:,} decisions ({100 * d / last:.0f}%)", files[i]))
+    return titles
+
+
 def progress_video(path, clips, speed=6.0, idle_speed=30.0, title_s=1.0, hold_s=1.0, fps=25,
                    extent=1.8, ring=0.13, lines=(), centre=None):
-    """A top-down video of the toy world, one attempt per checkpoint. For each one:
-    a title card (`title_s`), the attempt at `speed` x real time (stretches where
+    """A top-down video of the toy world, one clip per checkpoint. For each one:
+    a title card (`title_s`), the clip at `speed` x real time (stretches where
     nothing moves, like standing through a kick, at `idle_speed`), then the end held
     for `hold_s` with its result.
 
@@ -300,7 +316,7 @@ def write_report(path, *, title, summary, aim, training, checkpoints, rows, scor
              f"<code>--brain</code>.</p>{cmds}")
     parts = [f"""<h2>3. Results</h2>
 <h3>Watch it learn</h3>
-<p>One clip per checkpoint, early to late, in the {where}{" (top-down: blue arrow = duck, orange = ball)" if toy else ""}.</p>
+<p>{VIDEO_CHECKPOINTS} checkpoints, early to late, each having a couple of goes, in the {where}{" (top-down: blue arrow = duck, orange = ball)" if toy else ""}.</p>
 <video src="{esc(video)}" controls loop muted playsinline></video>
 <h3>Score per checkpoint</h3>
 <p>Each checkpoint scored on the same {where} episodes{", against the hand-written brain" if baseline is not None else ""}.</p>

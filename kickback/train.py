@@ -44,7 +44,7 @@ from common.brain import DECIDE_EVERY, MAX_FORWARD, MAX_TURN  # noqa: E402
 from common.duck import REPO, hub_policy, load_duck, find_rl_repo  # noqa: E402
 from common.steer import wrap  # noqa: E402
 from common.toy import DT, KICK_REACH, ToyWorld  # noqa: E402
-from common.training import (TrainingLog, export_onnx, film_in_mujoco, progress_video, trace_frame,  # noqa: E402
+from common.training import (TrainingLog, export_onnx, film_in_mujoco, progress_video, trace_frame, video_checkpoints,  # noqa: E402
                              write_report)
 from kickback.brain import OBS_SIZE, TRAIN_MARGIN, KickbackBrain, KickbackParams, LearnedKickbackBrain, observe  # noqa: E402
 from kickback.game import KICK_SECONDS, Kickback  # noqa: E402
@@ -67,7 +67,8 @@ PPO_SETTINGS = dict(n_steps=256, batch_size=1024, gamma=0.99)   # x 16 envs: one
 # by EASY_UNTIL of the way through. Scoring and playing always use the real one.
 EASY_START, EASY_UNTIL = 4.0, 0.7
 SCORE_S, SCORE_STARTS = 120.0, 8     # toy-world score: kicks / min over this many 2-minute games
-CLIP_S, MUJOCO_S = 60.0, 90.0        # longest toy-world attempt filmed per checkpoint / MuJoCo game
+VIDEO_KICKS, CLIP_S = 2, 90.0        # progress video: each checkpoint tries for this many kicks, for at most this long
+MUJOCO_S = 90.0                      # each checkpoint's MuJoCo game
 LONG_S = 300.0                       # then the final and hand-written brains, longer, in MuJoCo
 
 
@@ -146,10 +147,10 @@ class Outcomes(BaseCallback):
         return True
 
 
-def toy_kickback(brain, start, seconds, trace=None, one_kick=False):
+def toy_kickback(brain, start, seconds, trace=None, kicks=None):
     """A toy-world kickback game (ball at 0, 0, the game's line, a slightly noisy kick).
-    Returns (kicks, knocks); appends `trace_frame`s to `trace`. `one_kick`: stop once
-    the first kick's ball has stopped (one attempt, for the progress video)."""
+    Returns (kicks, knocks); appends `trace_frame`s to `trace`. `kicks`: stop once that
+    many kicks' balls have stopped rolling (for the progress video)."""
     (x, y), yaw = start
     brain.quiet = True
     w = ToyWorld(duck_xy=(x, y), yaw=yaw, lazy=True, kick_noise=0.05)
@@ -157,7 +158,7 @@ def toy_kickback(brain, start, seconds, trace=None, one_kick=False):
         w.step(brain.update(w.snapshot()))
         if trace is not None:
             trace.append(trace_frame(w))
-        if one_kick and any("end_xy" in k for k in brain.events["kicks"]):
+        if kicks and sum("end_xy" in k for k in brain.events["kicks"]) >= kicks:
             break
     return len(brain.events["kicks"]), len(brain.events["knocks"])
 
@@ -180,6 +181,18 @@ def kicks_per_min(make_brain):
     return kicks / minutes, knocks / minutes
 
 
+def make_progress_video(out: Path):
+    """progress.mp4 from a run's saved checkpoints: a few of them, each trying for VIDEO_KICKS kicks."""
+    print("Making the toy-world progress video...")
+    ends, clips = [np.array(e) for e in ENDS], []
+    for title, path in video_checkpoints(out):
+        frames = []
+        toy_kickback(brain := LearnedKickbackBrain(ends, path), START, CLIP_S, trace=frames, kicks=VIDEO_KICKS)
+        done = sum("end_xy" in k for k in brain.events["kicks"])
+        clips.append((title, f"{done} kick{'s' * (done != 1)} in {frames[-1][0]:.0f} s", frames))
+    progress_video(out / "progress.mp4", clips, ring=0, lines=[ENDS], centre=(0.0, 0.0), extent=1.2)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--steps", type=int, default=2_000_000, help="training decisions (0.1 s each)")
@@ -187,8 +200,11 @@ def main():
     ap.add_argument("--out", type=str, default=str(REPO / "runs" / "kickback_learned"))
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--mujoco-seconds", type=float, default=MUJOCO_S, help="how long each checkpoint plays in MuJoCo")
+    ap.add_argument("--remake-video", action="store_true", help="don't train: remake --out's progress.mp4 from its checkpoints")
     args = ap.parse_args()
     out = Path(args.out)
+    if args.remake_video:
+        return make_progress_video(out)
     (out / "checkpoints").mkdir(parents=True, exist_ok=True)
 
     ends = [np.array(e) for e in ENDS]
@@ -198,21 +214,17 @@ def main():
     torch.set_num_threads(1)              # a 64-64 network: threads only add overhead
     env = make_vec_env(LineUpEnv, n_envs=N_ENVS, seed=args.seed, vec_env_cls=SubprocVecEnv)
     model = PPO("MlpPolicy", env, seed=args.seed, verbose=0, **PPO_SETTINGS)
-    log, checkpoints, clips, t0 = TrainingLog(), [], [], time.time()
+    log, checkpoints, t0 = TrainingLog(), [], time.time()
     print(f"{'decisions':>10}  {'kicks/min':>9}  {'knocks/min':>10}  {'minutes':>7}   training episodes since last")
     chunk = max(args.steps // args.checkpoints, 1)
     trained = ""
     while True:
-        # Checkpoint: export, score it as the game will run it, film the game's start.
+        # Checkpoint: export, score it as the game will run it.
         n = model.num_timesteps
         path = out / "checkpoints" / f"brain_{n:07d}.onnx"
         export_onnx(model, path, OBS_SIZE)
         score, knocks = kicks_per_min(lambda: LearnedKickbackBrain(ends, path))
         checkpoints.append({"decisions": n, "score": score, "knocks": knocks, "file": str(path.relative_to(out))})
-        frames = []
-        kicked, _ = toy_kickback(LearnedKickbackBrain(ends, path), START, CLIP_S, trace=frames, one_kick=True)
-        clips.append((f"Checkpoint {len(checkpoints) - 1} / {args.checkpoints}: {n:,} decisions",
-                      f"kicked; the ball stopped at {frames[-1][0]:.0f} s" if kicked else f"no kick in {CLIP_S:g} s", frames))
         print(f"{n:>10}  {score:9.2f}  {knocks:10.2f}  {(time.time() - t0) / 60:7.1f}   {trained}", flush=True)
         if n >= args.steps:
             break
@@ -230,8 +242,7 @@ def main():
 
     model.save(out / "ppo.zip")
     export_onnx(model, out / "brain.onnx", OBS_SIZE)
-    print("Making the toy-world progress video...")
-    progress_video(out / "progress.mp4", clips, ring=0, lines=[ENDS], centre=(0.0, 0.0), extent=1.2)
+    make_progress_video(out)
 
     # The same checkpoints (and the hand-written brain, first) playing the real game in MuJoCo.
     print(f"Playing each checkpoint in MuJoCo for {args.mujoco_seconds:g} s...")

@@ -155,7 +155,7 @@ Every training run saves to its folder (e.g. `runs/kickback_learned/`):
   what it sees and does, the reward), 2 the training (how long, the settings),
   3 results (the progress video, the score at each checkpoint, reward and PPO
   losses), 4 the same checkpoints in MuJoCo (video, scores, commands to watch them).
-- `progress.mp4`: one top-down toy-world clip per checkpoint, early to late.
+- `progress.mp4`: 5 checkpoints, early to late, each having two goes (two balls or two kicks) in the top-down toy world. Remake it from the saved checkpoints with `--remake-video`.
 - `mujoco.mp4`: the hand-written brain, then each checkpoint, playing the real game in MuJoCo.
 - `checkpoints/`: the brain at each stage, so you can watch any of them with `--brain`.
 - `brain.onnx` (the final brain) and `ppo.zip` (to keep training).
