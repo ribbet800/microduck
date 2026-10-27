@@ -67,7 +67,7 @@ PPO_SETTINGS = dict(n_steps=256, batch_size=1024, gamma=0.99)   # x 16 envs: one
 # by EASY_UNTIL of the way through. Scoring and playing always use the real one.
 EASY_START, EASY_UNTIL = 4.0, 0.7
 SCORE_S, SCORE_STARTS = 120.0, 8     # toy-world score: kicks / min over this many 2-minute games
-CLIP_S, MUJOCO_S = 60.0, 90.0        # each checkpoint's toy-world clip / MuJoCo game
+CLIP_S, MUJOCO_S = 60.0, 90.0        # longest toy-world attempt filmed per checkpoint / MuJoCo game
 LONG_S = 300.0                       # then the final and hand-written brains, longer, in MuJoCo
 
 
@@ -146,9 +146,10 @@ class Outcomes(BaseCallback):
         return True
 
 
-def toy_kickback(brain, start, seconds, trace=None):
+def toy_kickback(brain, start, seconds, trace=None, one_kick=False):
     """A toy-world kickback game (ball at 0, 0, the game's line, a slightly noisy kick).
-    Returns (kicks, knocks); appends `trace_frame`s to `trace`."""
+    Returns (kicks, knocks); appends `trace_frame`s to `trace`. `one_kick`: stop once
+    the first kick's ball has stopped (one attempt, for the progress video)."""
     (x, y), yaw = start
     brain.quiet = True
     w = ToyWorld(duck_xy=(x, y), yaw=yaw, lazy=True, kick_noise=0.05)
@@ -156,6 +157,8 @@ def toy_kickback(brain, start, seconds, trace=None):
         w.step(brain.update(w.snapshot()))
         if trace is not None:
             trace.append(trace_frame(w))
+        if one_kick and any("end_xy" in k for k in brain.events["kicks"]):
+            break
     return len(brain.events["kicks"]), len(brain.events["knocks"])
 
 
@@ -207,8 +210,9 @@ def main():
         score, knocks = kicks_per_min(lambda: LearnedKickbackBrain(ends, path))
         checkpoints.append({"decisions": n, "score": score, "knocks": knocks, "file": str(path.relative_to(out))})
         frames = []
-        kicked, _ = toy_kickback(LearnedKickbackBrain(ends, path), START, CLIP_S, trace=frames)
-        clips.append((f"after {n:,} decisions: {kicked} kicks in {CLIP_S:g} s", frames))
+        kicked, _ = toy_kickback(LearnedKickbackBrain(ends, path), START, CLIP_S, trace=frames, one_kick=True)
+        clips.append((f"Checkpoint {len(checkpoints) - 1} / {args.checkpoints}: {n:,} decisions",
+                      f"kicked; the ball stopped at {frames[-1][0]:.0f} s" if kicked else f"no kick in {CLIP_S:g} s", frames))
         print(f"{n:>10}  {score:9.2f}  {knocks:10.2f}  {(time.time() - t0) / 60:7.1f}   {trained}", flush=True)
         if n >= args.steps:
             break

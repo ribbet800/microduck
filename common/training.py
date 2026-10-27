@@ -7,7 +7,7 @@ episode of each checkpoint with `trace_frame`, then calls `progress_video`,
 Everything lands in the run's folder:
 
     report.html     aim, training, results, and how it does in MuJoCo (open this)
-    progress.mp4    one short toy-world clip per checkpoint, early to late
+    progress.mp4    each checkpoint's attempt in the toy world, early to late
     mujoco.mp4      the same checkpoints in MuJoCo, with Pollen's policies as the legs
     checkpoints/    every checkpoint's brain.onnx, to watch any stage in MuJoCo
 
@@ -84,34 +84,73 @@ def trace_frame(world) -> tuple:
     return (world.t, *map(float, world.duck), float(world.yaw), *map(float, world.ball))
 
 
-def progress_video(path, clips, every_s=0.2, fps=25, extent=1.8, ring=0.13, lines=(), centre=None):
-    """A top-down video of the toy world, one clip per checkpoint. `clips`: [(title, frames)],
-    frames from `trace_frame`, each clip centred on `centre` (default: where its duck started). `ring`: a green
-    disc this big round the ball (e.g. a catch radius; 0 = none). `lines`: fixed segments
-    to draw ([((x0, y0), (x1, y1))], e.g. kickback's line)."""
+def _idle(frames, i, j, still=0.002):
+    """Nothing moves between frames i and j (duck, its heading and the ball all within `still`)."""
+    a, b = np.array(frames[i][1:]), np.array(frames[j][1:])
+    return float(np.max(np.abs(b - a))) < still
+
+
+def progress_video(path, clips, speed=6.0, idle_speed=30.0, title_s=1.0, hold_s=1.0, fps=25,
+                   extent=1.8, ring=0.13, lines=(), centre=None):
+    """A top-down video of the toy world, one attempt per checkpoint. For each one:
+    a title card (`title_s`), the attempt at `speed` x real time (stretches where
+    nothing moves, like standing through a kick, at `idle_speed`), then the end held
+    for `hold_s` with its result.
+
+    clips   [(title, result, frames)]: e.g. ("Checkpoint 3 / 10: 600,000 decisions",
+            "2 kicks", frames from `trace_frame`), each centred on `centre`
+            (default: where its duck started)
+    ring    a green disc this big round the ball (e.g. a catch radius; 0 = none)
+    lines   fixed segments to draw ([((x0, y0), (x1, y1))], e.g. kickback's line)"""
     writer = imageio.get_writer(str(path), fps=fps, quality=7, macro_block_size=8)
     fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
-    for title, frames in clips:
-        step = max(1, round(every_s / max(frames[1][0] - frames[0][0], 1e-9))) if len(frames) > 1 else 1
+
+    def frame():
+        fig.canvas.draw()
+        return np.asarray(fig.canvas.buffer_rgba())[..., :3].copy()
+
+    def scene(frames, i, cx, cy, caption):
+        t, x, y, yaw, bx, by = frames[i]
+        past = np.array([f[1:3] for f in frames[:i + 1]])
+        ax.clear()
+        for a, b in lines:
+            ax.plot([a[0], b[0]], [a[1], b[1]], color="0.8", lw=3, zorder=0)
+        ax.plot(past[:, 0], past[:, 1], color="0.5", lw=1)
+        ax.add_patch(plt.Circle((bx, by), 0.035, color="tab:orange", zorder=3))
+        if ring:
+            ax.add_patch(plt.Circle((bx, by), ring, color="tab:green", alpha=0.15, zorder=1))
+        ax.arrow(x, y, 0.12 * math.cos(yaw), 0.12 * math.sin(yaw), width=0.025, color="tab:blue", zorder=4)
+        ax.set_xlim(cx - extent, cx + extent)
+        ax.set_ylim(cy - extent, cy + extent)
+        ax.set_aspect("equal")
+        ax.grid(alpha=0.3)
+        ax.set_title(caption, fontsize=10)
+
+    for title, result, frames in clips:
+        dt = frames[1][0] - frames[0][0] if len(frames) > 1 else 0.02
         cx, cy = centre if centre is not None else (frames[0][1], frames[0][2])
-        for i in range(0, len(frames), step):
-            t, x, y, yaw, bx, by = frames[i]
-            past = np.array([f[1:3] for f in frames[:i + 1]])
-            ax.clear()
-            for a, b in lines:
-                ax.plot([a[0], b[0]], [a[1], b[1]], color="0.8", lw=3, zorder=0)
-            ax.plot(past[:, 0], past[:, 1], color="0.5", lw=1)
-            ax.add_patch(plt.Circle((bx, by), 0.035, color="tab:orange", zorder=3))
-            if ring:
-                ax.add_patch(plt.Circle((bx, by), ring, color="tab:green", alpha=0.15, zorder=1))
-            ax.arrow(x, y, 0.12 * math.cos(yaw), 0.12 * math.sin(yaw), width=0.025, color="tab:blue", zorder=4)
-            ax.set_xlim(cx - extent, cx + extent)
-            ax.set_ylim(cy - extent, cy + extent)
-            ax.set_aspect("equal")
-            ax.grid(alpha=0.3)
-            ax.set_title(f"{title}\nt = {t:4.1f} s", fontsize=10)
-            fig.canvas.draw()
-            writer.append_data(np.asarray(fig.canvas.buffer_rgba())[..., :3])
+        # Title card.
+        ax.clear()
+        ax.axis("off")
+        ax.text(0.5, 0.5, title, ha="center", va="center", fontsize=15, wrap=True, transform=ax.transAxes)
+        card = frame()
+        for _ in range(round(title_s * fps)):
+            writer.append_data(card)
+        ax.axis("on")
+        # The attempt: `speed` x real time, faster through stretches where nothing moves.
+        step, fast = max(1, round(speed / fps / dt)), max(1, round(idle_speed / fps / dt))
+        i = 0
+        while i < len(frames) - 1:
+            j = min(i + fast, len(frames) - 1)
+            idle = _idle(frames, i, j)
+            scene(frames, i, cx, cy, f"{title}\nt = {frames[i][0]:4.1f} s" + ("   (fast-forward)" if idle else ""))
+            writer.append_data(frame())
+            i = j if idle else i + step
+        # Hold the end with the result.
+        scene(frames, len(frames) - 1, cx, cy, f"{title}\n{result}")
+        end = frame()
+        for _ in range(round(hold_s * fps)):
+            writer.append_data(end)
     plt.close(fig)
     writer.close()
 

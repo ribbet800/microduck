@@ -82,9 +82,10 @@ class ChaseEnv(gym.Env):
         return observe(w.snapshot(), self.cmd), reward, False, truncated, {"catches": self.catches}
 
 
-def toy_chase(brain, rng, seconds=EPISODE_S, trace=None):
+def toy_chase(brain, rng, seconds=EPISODE_S, trace=None, one_ball=False):
     """One toy-world chase with `brain` (through the same Snapshot -> Action interface
-    the real game uses). Returns balls reached; appends `trace_frame`s to `trace`."""
+    the real game uses). Returns balls reached; appends `trace_frame`s to `trace`.
+    `one_ball`: stop at the first ball reached (one attempt, for the progress video)."""
     w = ToyWorld(yaw=rng.uniform(-math.pi, math.pi), lazy=True)
     spawn_ball(w, rng)
     catches = 0
@@ -94,6 +95,8 @@ def toy_chase(brain, rng, seconds=EPISODE_S, trace=None):
             trace.append(trace_frame(w))
         if np.linalg.norm(w.ball - w.duck) < CATCH_RADIUS:
             catches += 1
+            if one_ball:
+                break
             spawn_ball(w, rng)
     return catches
 
@@ -131,8 +134,9 @@ def main():
         score = balls_per_min(lambda: LearnedChaseBrain(path))
         checkpoints.append({"decisions": n, "score": score, "file": str(path.relative_to(out))})
         frames = []
-        caught = toy_chase(LearnedChaseBrain(path), np.random.default_rng(7), seconds=20, trace=frames)
-        clips.append((f"after {n:,} decisions: {caught} balls in 20 s", frames))
+        caught = toy_chase(LearnedChaseBrain(path), np.random.default_rng(7), seconds=20, trace=frames, one_ball=True)
+        clips.append((f"Checkpoint {len(checkpoints) - 1} / {args.checkpoints}: {n:,} decisions",
+                      f"reached the ball in {frames[-1][0]:.1f} s" if caught else "didn't reach it in 20 s", frames))
         print(f"{n:>10}  {score:9.1f}  {(time.time() - t0) / 60:7.1f}")
         if n >= args.steps:
             break
