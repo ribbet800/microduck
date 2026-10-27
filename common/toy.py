@@ -13,6 +13,7 @@ Legs: perfect (move exactly as commanded) or `lazy`, like Pollen's walking
 policy measured in MuJoCo. Skills: the duck stands still while one runs
 (`skill_seconds`). Kicks are like Pollen's blind kick policy: the ball flies
 straight ahead at 1 m/s only if it's on the kick spot. The ball rolls and slows down.
+The duck's feet are a rectangle: walk or turn into the ball and it gets pushed.
 """
 
 from __future__ import annotations
@@ -31,6 +32,31 @@ SKILL_SECONDS = {"kick_left": 3.0, "kick_right": 3.0}   # how long each skill ru
 KICK_SPOTS = {"kick_left": (0.09, 0.042), "kick_right": (0.09, -0.042)}
 KICK_REACH = 0.02
 BALL_DECEL = 0.4   # m/s^2
+BALL_R = 0.035     # Pollen's 70 mm ball
+# What of the duck can touch the ball (it's 7 cm tall), in its frame, measured standing
+# in MuJoCo: feet and shins. The kick spot is ~2 cm clear of the toes.
+FEET_X, FEET_Y = (-0.033, 0.035), 0.063
+
+
+def push_ball(duck, yaw, v, wz, ball, ball_v):
+    """If the ball overlaps the duck's feet, move it out and give it at least the
+    feet's speed there (a dead push, no bounce). Returns (ball, ball_v)."""
+    rel = to_duck_frame(duck, yaw, ball)
+    near = np.array([np.clip(rel[0], *FEET_X), np.clip(rel[1], -FEET_Y, FEET_Y)])
+    gap = rel - near
+    dist = float(np.linalg.norm(gap))
+    if dist >= BALL_R:
+        return ball, ball_v
+    c, s = math.cos(yaw), math.sin(yaw)
+    rot = np.array([[c, -s], [s, c]])
+    n = rot @ (gap / dist if dist > 1e-9 else np.array([1.0, 0.0]))   # out of the feet, in the world
+    ball = ball + (BALL_R - dist) * n
+    p = rot @ near
+    v_feet = v + wz * np.array([-p[1], p[0]])                         # the feet's velocity at that point
+    closing = float(np.dot(ball_v - v_feet, n))
+    if closing < 0:
+        ball_v = ball_v - closing * n
+    return ball, ball_v
 
 
 def lazy_legs(cmd, walking):
@@ -75,6 +101,7 @@ class ToyWorld:
             if spot is not None and np.linalg.norm(rel - spot) < KICK_REACH:     # foot connects
                 ang = self.yaw + self.rng.normal(0, self.kick_noise)
                 self.ball_v = np.array([math.cos(ang), math.sin(ang)])
+        v, wz = np.zeros(2), 0.0
         if self.skill:
             self.skill_left -= DT
             if self.skill_left <= 0:
@@ -85,7 +112,9 @@ class ToyWorld:
                 vx, vy, wz, self.walking = lazy_legs(act.cmd, self.walking)
             self.yaw += wz * DT
             c, s = math.cos(self.yaw), math.sin(self.yaw)
-            self.duck += DT * np.array([c * vx - s * vy, s * vx + c * vy])
+            v = np.array([c * vx - s * vy, s * vx + c * vy])
+            self.duck += DT * v
+        self.ball, self.ball_v = push_ball(self.duck, self.yaw, v, wz, self.ball, self.ball_v)
         sp = np.linalg.norm(self.ball_v)
         if sp > 0:
             self.ball_v *= max(0.0, sp - BALL_DECEL * DT) / sp

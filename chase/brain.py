@@ -5,8 +5,8 @@
 
 `ChaseBrain` steers with common/steer.py (~20 lines of geometry).
 `LearnedBrain` asks a small network trained by chase/train.py instead; what
-it sees (`observe`) and how its output becomes a command (`to_command`) are
-defined here, once, so training and playing can't disagree.
+it sees (`observe`) and how its output becomes a command (`to_command`, in
+common/brain.py) are defined once, so training and playing can't disagree.
 
 Reaching the ball, respawning it and giving up are game rules, not the
 brain's business (chase/game.py).
@@ -18,13 +18,9 @@ import math
 
 import numpy as np
 
-from common.brain import Action, Brain, Snapshot
+from common.brain import DECIDE_EVERY, MAX_FORWARD, MAX_TURN, Action, Brain, Network, Snapshot, to_command
 from common.steer import SteerParams, steer_to, to_duck_frame
 
-# The learned brain: decides 10 times a second and holds its command in between
-# (5 x 50 Hz ticks), with commands inside the walking policy's trained ranges.
-DECIDE_EVERY = 5
-MAX_FORWARD, MAX_TURN = 0.4, 1.0
 OBS_SIZE = 7
 
 
@@ -35,13 +31,6 @@ def observe(s: Snapshot, last_cmd) -> np.ndarray:
     dist, bearing = math.hypot(x, y), math.atan2(y, x)
     return np.array([x / 2, y / 2, min(dist, 4.0) / 2, math.sin(bearing), math.cos(bearing),
                      last_cmd[0] / MAX_FORWARD, last_cmd[2] / MAX_TURN], dtype=np.float32)
-
-
-def to_command(a) -> np.ndarray:
-    """The network's two outputs (each in [-1, 1]) -> [vx, vy, wz]: forward 0 to
-    MAX_FORWARD (the duck can't walk backwards or sidestep anyway), turn ±MAX_TURN."""
-    a = np.clip(np.asarray(a, dtype=np.float32), -1.0, 1.0)
-    return np.array([MAX_FORWARD * (a[0] + 1) / 2, 0.0, MAX_TURN * a[1]], dtype=np.float32)
 
 
 class ChaseBrain(Brain):
@@ -69,17 +58,14 @@ class LearnedBrain(ChaseBrain):
     """Chases with a network exported by chase/train.py (an ONNX file)."""
 
     def __init__(self, onnx_path: str):
-        import onnxruntime as ort   # here, so the hand-written brain and the tests don't need it
         super().__init__()
         self.p = {"onnx": str(onnx_path)}
-        self.session = ort.InferenceSession(str(onnx_path))
-        self.input = self.session.get_inputs()[0].name
+        self.net = Network(onnx_path)
         self.cmd = np.zeros(3, dtype=np.float32)
         self.ticks = 0
 
     def command(self, s: Snapshot) -> np.ndarray:
         if self.ticks % DECIDE_EVERY == 0:
-            a = self.session.run(None, {self.input: observe(s, self.cmd)[None]})[0][0]
-            self.cmd = to_command(a)
+            self.cmd = to_command(self.net(observe(s, self.cmd)))
         self.ticks += 1
         return self.cmd

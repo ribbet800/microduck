@@ -8,6 +8,7 @@ the ball goes, then goes round it and kicks it back.
 
   Live:      uv run kickback/game.py            (macOS: uv run mjpython kickback/game.py)
   Headless:  uv run kickback/game.py --headless --duration 180 --video
+  Learned:   uv run kickback/game.py --brain runs/kickback_learned/brain.onnx   (kickback/train.py)
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from common import overlay, run  # noqa: E402
 from common.duck import Duck, hub_policy  # noqa: E402
 from common.game import Game  # noqa: E402
 from kickback import plots  # noqa: E402
-from kickback.brain import WHIFF_SPEED, KickbackBrain  # noqa: E402
+from kickback.brain import WHIFF_SPEED, KickbackBrain, LearnedKickbackBrain  # noqa: E402
 
 KICK_SECONDS = 3.0   # how long a kick skill runs before handing back to walking (Pollen's default)
 
@@ -110,6 +111,9 @@ class Kickback(Game):
                 "mean_lineup_error_mm": round(1000 * float(np.mean([k["err_m"] for k in kicks])), 1) if kicks else None,
                 "mean_off_line_m": round(float(np.mean(off)), 3) if off else None,
                 "line_up_retries": len(b.events["retries"]),
+                "knocks": len(b.events["knocks"]),
+                "ball_crept": len(b.events["crept"]),
+                "brain": type(b).__name__ + (f" ({b.net.path})" if hasattr(b, "net") else ""),
                 "timeouts": len(b.events["timeouts"]),
                 "params": dataclasses.asdict(b.p)}
 
@@ -130,6 +134,8 @@ def main():
     for foot in ("left", "right"):
         ap.add_argument(f"--kick-{foot}", type=str, default=None,
                         help=f"{foot}-foot kick policy ONNX (default: ball_kick_{foot}.onnx from the Hub)")
+    ap.add_argument("--brain", type=str, default=None,
+                    help="a learned line-up (ONNX from kickback/train.py) instead of the hand-written one")
     args = ap.parse_args()
 
     train_hint = ("or train one in microduck_rl: `uv run train Mjlab-BallKick-Flat-MicroDuck` "
@@ -140,7 +146,8 @@ def main():
               for foot in ("left", "right")}
     duck = run.duck_from_args(args, skills)
     half = args.length / 2
-    brain = KickbackBrain(ends=[(-half, 0.0), (half, 0.0)])
+    ends = [(-half, 0.0), (half, 0.0)]
+    brain = LearnedKickbackBrain(ends, args.brain) if args.brain else KickbackBrain(ends)
     run.play(Kickback(duck, brain, aim_arrow=args.ball_roll or 2.0), args)   # Pollen's ball (0) never stops: draw 2 m
 
 

@@ -12,10 +12,10 @@ import math
 import numpy as np
 import pytest
 
-from common.brain import Snapshot
+from common.brain import Action, Snapshot
 from common.steer import to_duck_frame
 from common.toy import DT, ToyWorld
-from kickback.brain import KickbackBrain, KickbackParams
+from kickback.brain import KickbackBrain, KickbackParams, LearnedKickbackBrain
 
 ENDS = ((-0.5, 0.0), (0.5, 0.0))
 TOL = KickbackParams().tolerance
@@ -147,6 +147,22 @@ def test_keeps_kicking_with_lazy_legs(start):
     assert all(abs(k["aim_err_deg"]) < 15 for k in finished(brain))
 
 
+def test_toy_duck_pushes_the_ball_it_walks_into():
+    # Ball on the kick spot doesn't touch the feet; walking on pushes it ahead.
+    w = ToyWorld(duck_xy=(0.0, 0.0), ball_xy=(0.09, 0.042))
+    w.step(Action())
+    assert w.ball == pytest.approx([0.09, 0.042])
+    for _ in range(int(1 / DT)):
+        w.step(Action(cmd=np.array([0.3, 0.0, 0.0])))
+    assert w.ball[0] > w.duck[0] + 0.065 and w.ball[0] > 0.3
+    # Turning on the spot with the ball on the kick spot sweeps it with a foot
+    # (what knocked it in MuJoCo after retries: plans.md §2).
+    w = ToyWorld(duck_xy=(0.0, 0.0), ball_xy=(0.09, 0.042))
+    for _ in range(int(1 / DT)):
+        w.step(Action(cmd=np.array([0.0, 0.0, -1.0])))
+    assert np.linalg.norm(w.ball - [0.09, 0.042]) > 0.005
+
+
 def test_aims_again_when_the_ball_is_knocked():
     w, brain = ToyWorld(duck_xy=(-0.4, 0.0), ball_xy=(0.0, 0.0)), KickbackBrain(ENDS)
     for _ in range(int(2 / DT)):
@@ -189,6 +205,20 @@ def test_kick_that_never_starts_does_not_hang():
         reasons.add(brain.last_change)
     assert any("never started" in r for r in reasons)
     assert len(brain.events["kicks"]) <= 1      # failed kicks aren't counted (bar one still waiting)
+
+
+def test_learned_brain_stops_when_lined_up_and_kicks():
+    # A "network" that always says full speed ahead: the brain must stop it by itself
+    # once the ball is on the spot, then hand over to the usual settle and kick.
+    brain = LearnedKickbackBrain(ENDS, net=lambda obs: np.array([1.0, 0.0]), feet=["right"])
+    brain.aim, brain.aim_from = np.array([1.0, 0.0]), np.zeros(2)
+    stance = brain.stance_for(np.zeros(2), "right")
+    w = ToyWorld(duck_xy=stance - [0.1, 0.0], ball_xy=(0.0, 0.0))    # walking in along the aim line
+    for _ in range(int(8 / DT)):
+        w.step(brain.update(w.snapshot()))
+    kicks = brain.events["kicks"]
+    assert kicks and kicks[0]["err_m"] <= TOL and not brain.events["knocks"]
+    assert w.ball[0] > 1.0                                             # kicked along the aim
 
 
 def test_falls_go_to_recover_and_back():

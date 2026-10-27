@@ -115,9 +115,59 @@ legs; `LearnedBrain` in `chase/brain.py` runs the exported ONNX; `chase/game.py 
   turn (5% vs 9% of the time), and the real velstand walks faster that way (0.148 vs
   0.102 m/s achieved). The toy legs don't model that, so the toy world under-rated it.
 
+Retrained 2026-10-27 for the new report layout (MuJoCo clips per checkpoint): 6.4 vs 5.5
+balls/min in the toy world, 9 vs 6 balls in 60 MuJoCo seconds.
+
 Next, if wanted: make `lazy_legs` speed depend on turning (fit from `log.csv` of real runs)
 so the toy world ranks brains like MuJoCo does; fine-tune in MuJoCo (a Gymnasium env around
-`common.game.Game` + `Duck`, a few CPU copies); then the same recipe for kickback's ALIGN.
+`common.game.Game` + `Duck`, a few CPU copies). The same recipe for kickback's line-up: done,
+Stage 1b.
+
+### Stage 1b: learn kickback's line-up (2026-10-26)
+
+`kickback/train.py` trains a network to replace APPROACH + ALIGN (`LearnedKickbackBrain`);
+the hand-written SETTLE / KICK / WATCH stay. `kickback/game.py --brain`. One episode = one
+line-up attempt (random ball, aim, duck pose), +10 lined up, −10 for moving the ball 1 cm,
++10/m towards the stance, +1/rad towards the aim, −0.1/s.
+
+- **Toy world first needed ball pushing** (`common/toy.py: push_ball`): the duck walked
+  through the ball. Feet = a rectangle measured from Pollen's model (x −3.3…+3.5 cm,
+  y ±6.3 cm); a ball on the kick spot is 2 cm clear of the toes; turning on the spot next
+  to it sweeps it (the real knock cause, §2).
+- **Curriculum was essential:** without it ~2% of attempts lined up and it didn't learn. The
+  "lined up" window starts 4x bigger and shrinks to 15 mm / 8° by 70% of training.
+- **16 environments in subprocesses + torch 1 thread:** ~2000 decisions/s, 2M in ~17 min.
+- **What went wrong, in order:**
+  1. Run 1 (lined up = inside 12 mm, 0.8 x tolerance): beat the hand-written brain in the
+     toy world (2.7 vs 2.1 kicks/min) but in MuJoCo froze for minutes 13 mm off: small
+     turns are inside velstand's dead zone, so nothing changed and it never moved again.
+  2. Run 2 (−10 for running out of time, to make freezing costly): learned far slower and
+     never got good (45% lined up at 1.4M). Dropped.
+  3. Run 1's network with "lined up = inside 15 mm": 15 kicks / 5 min vs 12, 1 knock vs 4,
+     0 stuck, aim error 6.4° vs 10.3° (MuJoCo, one run each). So the 12 mm margin was the trap.
+  4. Run 3 (trained with 15 mm): 10 kicks / 5 min, 3 knocks, stuck twice: after a near
+     miss next to the ball it still freezes rather than walk off and come round. Training
+     with no margin leaves no room for the real duck's lunge and sway.
+  5. Run 4: toy duck lunged/wobbled when it stopped, so near misses happen in training, and
+     discount 0.995 (~20 s look-ahead) so a walk-off pays. Worse everywhere: 0.5 kicks/min in
+     the toy world, 0 kicks and 6 times stuck in 5 MuJoCo minutes. Dropped.
+  6. **Final:** run 1's training (margin 0.8, discount 0.99) and the brain plays to the full
+     tolerance (`LearnedKickbackBrain(margin=1.0)`, `TRAIN_MARGIN = 0.8`). 2M decisions,
+     ~21 min. Toy world 3.0 vs 2.1 kicks/min. **MuJoCo, 5 min: 15 kicks vs 12, 1 knock vs 4,
+     0 stuck, 0 falls, aim error 6.4° vs 10.3°, ball ends 0.13 vs 0.18 m off the line.**
+     `runs/kickback_learned/report.html`. In the 90 s clips, checkpoints before 1.6M mostly
+     get stuck once (a 45 s timeout); 1.6M on kick 5-6 times in 90 s.
+- **Measurement bugs found on the way:** (a) "knocks" counted the ball still creeping at
+  1–2 cm/s after WATCH called it stopped, with the duck 0.4–1 m away; now only within 0.3 m
+  counts (`crept` for the rest). (b) Filming many games on one `Duck` drifted: late
+  checkpoints froze in the report but not on their own. `reset` now calls `mj_resetData` and
+  stops skills, which helped but wasn't enough (some of Pollen's runner state carries over),
+  so the trainers load a fresh `Duck` per game.
+- **Still open:** it can still freeze after a near miss (the walk-off-and-come-round that
+  the hand-written ALIGN does as a "retry" was never learned). Ideas: a stuck detector that
+  hands one attempt to the hand-written approach; fine-tuning in MuJoCo, where the near
+  misses actually happen.
+- One 5-minute MuJoCo run per brain is noisy (§2: ±3 kicks); the game always starts the same.
 
 ### Stage 2: grab the ball with the beak
 - First check physics: can the beak hold a 70 mm / 15 g ball at all in sim? Find the jaw
@@ -202,3 +252,8 @@ Add dated entries: what was tried, numbers, what was learned.
   to `common/toy.py`. Same-seed MuJoCo runs of both games identical before and after.
   First learned brain: chase PPO in the toy world (~6 min CPU), ~40% more balls than the
   hand-written chaser in MuJoCo (§3 Stage 1).
+- **2026-10-26/27:** Learned kickback line-up (§3 Stage 1b): toy feet push the ball,
+  curriculum on the "lined up" window, trained to 12 mm and played to 15 mm. 5 MuJoCo
+  minutes: 15 kicks vs 12, 1 knock vs 4. Every training report now has four parts (aim,
+  training, results, the same checkpoints in MuJoCo); chase retrained for it. Found and
+  fixed: "knocks" counted a creeping ball; many games on one `Duck` drifted.

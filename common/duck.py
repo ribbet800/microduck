@@ -149,8 +149,13 @@ class Duck:
     # -- reset / ball ---------------------------------------------------------
     def reset(self, xy=(0.0, 0.0), yaw=0.0):
         d, p = self.data, self.policy
-        d.qpos[:] = 0.0
-        d.qvel[:] = 0.0
+        # All of MuJoCo's state, not just positions and velocities, and no leftover
+        # skill or command. (Some of Pollen's runner state still carries over: for
+        # identical games, load a fresh Duck.)
+        mujoco.mj_resetData(self.model, d)
+        self.stop_skill()
+        p.vel_cmd = np.zeros(3, dtype=np.float32)
+        p.command[:] = 0.0
         d.qpos[self.qadr:self.qadr + 7] = [xy[0], xy[1], STAND_Z,
                                             math.cos(yaw / 2), 0, 0, math.sin(yaw / 2)]
         for i, qi in enumerate(p.joint_qpos_indices):

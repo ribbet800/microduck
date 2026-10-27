@@ -44,6 +44,8 @@ class Action:
 class Brain:
     """A named state, when it was entered, and why."""
 
+    quiet = False                        # True: don't print state changes (training runs millions)
+
     def __init__(self, state: str):
         self.state = state
         self.state_t0 = 0.0
@@ -56,8 +58,37 @@ class Brain:
         if state != self.state or why:
             change = f"{self.state} -> {state}" if state != self.state else f"{state} again"
             self.last_change = change + (f"  ({why})" if why else "")
-            print(f"[{t:6.1f}s] {self.last_change}")
+            if not self.quiet:
+                print(f"[{t:6.1f}s] {self.last_change}")
         self.state, self.state_t0 = state, t
 
     def update(self, s: Snapshot) -> Action:
         raise NotImplementedError
+
+
+# -- learned brains -----------------------------------------------------------------
+# A learned brain (chase/train.py, kickback/train.py) decides 10 times a second and
+# holds its command in between (5 x 50 Hz ticks), with commands inside the walking
+# policy's trained ranges.
+DECIDE_EVERY = 5
+MAX_FORWARD, MAX_TURN = 0.4, 1.0
+
+
+def to_command(a) -> np.ndarray:
+    """A network's two outputs (each in [-1, 1]) -> [vx, vy, wz]: forward 0 to
+    MAX_FORWARD (the duck can't walk backwards or sidestep anyway), turn ±MAX_TURN."""
+    a = np.clip(np.asarray(a, dtype=np.float32), -1.0, 1.0)
+    return np.array([MAX_FORWARD * (a[0] + 1) / 2, 0.0, MAX_TURN * a[1]], dtype=np.float32)
+
+
+class Network:
+    """A trained network exported to ONNX: observation in, the two outputs out."""
+
+    def __init__(self, onnx_path):
+        import onnxruntime as ort   # here, so the hand-written brains and the tests don't need it
+        self.path = str(onnx_path)
+        self.session = ort.InferenceSession(self.path)
+        self.input = self.session.get_inputs()[0].name
+
+    def __call__(self, obs) -> np.ndarray:
+        return self.session.run(None, {self.input: np.asarray(obs, dtype=np.float32)[None]})[0][0]

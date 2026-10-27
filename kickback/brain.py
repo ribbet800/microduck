@@ -24,6 +24,9 @@ when it kicks, and all the skill is in lining up.
               was aimed, aim the next kick
     RECOVER   fell over: zero command while the walking policy gets up
 
+`LearnedKickbackBrain` (at the end) swaps APPROACH + ALIGN for a network
+trained by kickback/train.py; the rest is the same.
+
 docs/how_it_works.md draws this as a diagram, with every transition.
 """
 
@@ -31,10 +34,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
-from common.brain import Action, Brain, Snapshot
+from common.brain import DECIDE_EVERY, MAX_FORWARD, MAX_TURN, Action, Brain, Network, Snapshot, to_command
 from common.steer import SteerParams, from_duck_frame, left_of, steer_to, to_duck_frame, wrap
 
 WHIFF_SPEED = 0.2   # a kick that sends the ball slower than this (m/s) is a whiff
@@ -54,6 +58,7 @@ def _on_circle(centre, radius, angle):
 @dataclass
 class KickbackParams:
     moved: float = 0.05                    # ball knocked this far since aiming (m): aim again
+    reach: float = 0.3                     # ...by the duck if its trunk was this close, else it crept
     # Where the kick policy expects the ball (microduck_ball_kick_env_cfg.py:
     # BALL_OFFSET_X / BALL_OFFSET_ABS_Y, trained with ±1.5 cm noise).
     spot_x: float = 0.09
@@ -108,7 +113,7 @@ class KickbackBrain(Brain):
         self.feet = list(feet)
         self.foot = self.feet[0]
         self.attempt_t0 = 0.0
-        self.events = {"kicks": [], "retries": [], "orbits": [], "timeouts": []}
+        self.events = {"kicks": [], "retries": [], "orbits": [], "timeouts": [], "knocks": [], "crept": []}
         self._kick_started = False
         self._kick_peak = 0.0
         self._lined_up_t0 = None
@@ -187,6 +192,10 @@ class KickbackBrain(Brain):
         # Knocked the ball (not with a kick)? Once it's still again, aim afresh from there.
         if (self.state in ("APPROACH", "ALIGN", "SETTLE") and s.ball_speed < p.ball_stopped
                 and np.linalg.norm(s.ball_xy - self.aim_from) > p.moved):
+            # Knocked by the duck, or just still creeping after WATCH called it stopped
+            # (MuJoCo's ball rolls on at 1-2 cm/s for a while)? Both mean aiming again.
+            near = float(np.linalg.norm(s.ball_xy - s.duck_xy)) < p.reach
+            self.events["knocks" if near else "crept"].append({"t": s.t, "state": self.state})
             return self._new_attempt(s, "ball was knocked")
 
         if self.state == "APPROACH":
@@ -375,3 +384,73 @@ class KickbackBrain(Brain):
         })
         self.set_state("KICK", s.t, f"{self.foot} foot, aiming {self.aim_deg:+.0f}°, {err * 1000:.0f} mm off")
         return act
+
+
+# -- the learned brain ---------------------------------------------------------------
+OBS_SIZE = 11
+TRAIN_MARGIN = 0.8
+
+
+def observe(s: Snapshot, aim, spot, last_cmd) -> np.ndarray:
+    """What the learned brain sees, all in the duck's frame (x ahead, y left), roughly in
+    [-1, 1]: where the ball is; how far it is from the kick spot (in 10 cm, so the 15 mm
+    that matters is visible); where the trunk has to stand (the stance); the aim as
+    sin / cos of the heading error; which foot (+1 left, -1 right); the last command."""
+    ball = to_duck_frame(s.duck_xy, s.duck_yaw, s.ball_xy)
+    off = np.clip((ball - spot) / 0.1, -3.0, 3.0)
+    stance = to_duck_frame(s.duck_xy, s.duck_yaw, s.ball_xy - spot[0] * aim - spot[1] * left_of(aim))
+    h = wrap(math.atan2(aim[1], aim[0]) - s.duck_yaw)
+    return np.array([*np.clip(ball, -3.0, 3.0), *off, *np.clip(stance, -3.0, 3.0), math.sin(h), math.cos(h),
+                     1.0 if spot[1] > 0 else -1.0, last_cmd[0] / MAX_FORWARD, last_cmd[2] / MAX_TURN],
+                    dtype=np.float32)
+
+
+class LearnedKickbackBrain(KickbackBrain):
+    """Kickback with a network (kickback/train.py) doing the lining up: in APPROACH it
+    walks wherever the network says, 10 times a second, until the ball is on the kick
+    spot and it faces along the aim; then it stops by itself, and if that holds for
+    `lined_up_s` the hand-written SETTLE / KICK / WATCH take over as usual. (ALIGN, the
+    hand-written fine line-up, isn't used: drifting in SETTLE goes back to APPROACH.)
+    The foot is picked once per attempt, the nearer stance, and the network is told which.
+
+    `net`: an ONNX path, or anything callable obs -> two outputs in [-1, 1] (training).
+    `margin`: "lined up" means within this fraction of the tolerance. Training uses
+    TRAIN_MARGIN; playing uses all of it, which leaves room for the real duck's lunge
+    and sway (trained and played at 1.0, it froze next to the ball after near misses)."""
+
+    def __init__(self, ends, net, params: KickbackParams = KickbackParams(), feet=("left", "right"), margin=1.0):
+        super().__init__(ends, params, feet)
+        self.margin = margin
+        self.net = Network(net) if isinstance(net, (str, Path)) else net
+        self.cmd = np.zeros(3, dtype=np.float32)
+        self._attempt = None             # state_t0 of the APPROACH the foot was picked for
+        self.ticks = 0
+
+    def _approach(self, s: Snapshot):
+        p = self.p
+        if self._attempt != self.state_t0:
+            self.start_attempt(s)
+        e, h = self._errors(s)
+        err = float(np.linalg.norm(e))
+        self.plan = [np.array(s.duck_xy, float), self.stance_for(s.ball_xy, self.foot)]
+        self.ticks += 1
+        # Lined up: stand still, and after lined_up_s hand over to SETTLE.
+        if abs(h) < p.heading_tol and err < self.margin * p.tolerance:
+            if self._lined_up_t0 is None:
+                self._lined_up_t0 = s.t
+            if s.t - self._lined_up_t0 >= p.lined_up_s - 1e-9:
+                self.set_state("SETTLE", s.t, f"lined up ({err * 1000:.0f} mm off), {self.foot} foot")
+            return np.zeros(3, dtype=np.float32)
+        self._lined_up_t0 = None
+        if (self.ticks - 1) % DECIDE_EVERY == 0:
+            self.cmd = to_command(self.net(observe(s, self.aim, self.spot_rel(), self.cmd)))
+        return self.cmd
+
+    def start_attempt(self, s: Snapshot):
+        """A new APPROACH: pick the foot whose stance is nearer, and start deciding afresh."""
+        self._attempt, self.ticks, self._lined_up_t0 = self.state_t0, 0, None
+        self.foot = min(self.feet, key=lambda f: np.linalg.norm(self.stance_for(s.ball_xy, f) - s.duck_xy))
+
+    def _align(self, s: Snapshot, dt_state):
+        self.set_state("APPROACH", s.t, "back to the network")
+        return Action()

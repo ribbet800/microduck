@@ -11,7 +11,8 @@ toy world's legs are `lazy`, like Pollen's walking policy in MuJoCo (dead zone,
   uv run chase/game.py --brain runs/chase_learned/brain.onnx   # watch it in MuJoCo
 
 Saves to runs/chase_learned/ (common/training.py): report.html (open this),
-progress.mp4, brain.onnx (what --brain loads), checkpoints/, ppo.zip (to keep training).
+progress.mp4 (toy world), mujoco.mp4 (the same checkpoints in MuJoCo),
+brain.onnx (what --brain loads), checkpoints/, ppo.zip (to keep training).
 """
 
 from __future__ import annotations
@@ -30,18 +31,19 @@ from stable_baselines3.common.env_util import make_vec_env
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # so `uv run chase/train.py` finds the packages
 
-from chase.brain import DECIDE_EVERY, MAX_FORWARD, MAX_TURN, OBS_SIZE, ChaseBrain, LearnedBrain, observe, to_command  # noqa: E402
-from chase.game import CATCH_RADIUS, SPAWN_R  # noqa: E402
-from common.brain import Action  # noqa: E402
-from common.duck import REPO  # noqa: E402
+from chase.brain import OBS_SIZE, ChaseBrain, LearnedBrain, observe  # noqa: E402
+from chase.game import CATCH_RADIUS, SPAWN_R, Chase  # noqa: E402
+from common.brain import DECIDE_EVERY, MAX_FORWARD, MAX_TURN, Action, to_command  # noqa: E402
+from common.duck import REPO, find_rl_repo, hub_policy, load_duck  # noqa: E402
 from common.toy import DT, ToyWorld  # noqa: E402
-from common.training import TrainingLog, progress_video, trace_frame, write_report  # noqa: E402
+from common.training import TrainingLog, film_in_mujoco, progress_video, trace_frame, write_report  # noqa: E402
 
 EPISODE_S = 30.0
 EPISODE_DECISIONS = round(EPISODE_S / (DECIDE_EVERY * DT))
 PROGRESS = 10.0       # reward per metre closer to the ball
 CATCH_BONUS = 10.0    # reward for reaching it (then a new ball drops)
 PPO_SETTINGS = dict(n_steps=512, batch_size=1024, gamma=0.99)   # x 8 envs: one update per 4096 decisions
+MUJOCO_S = 60.0       # each checkpoint's MuJoCo game
 
 
 def spawn_ball(world, rng):
@@ -124,6 +126,7 @@ def main():
     ap.add_argument("--checkpoints", type=int, default=10, help="score, save and film the brain this many times")
     ap.add_argument("--out", type=str, default=str(REPO / "runs" / "chase_learned"))
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--mujoco-seconds", type=float, default=MUJOCO_S, help="how long each checkpoint plays in MuJoCo")
     args = ap.parse_args()
     out = Path(args.out)
     (out / "checkpoints").mkdir(parents=True, exist_ok=True)
@@ -151,18 +154,41 @@ def main():
             break
         model.learn(chunk, callback=log, reset_num_timesteps=False)
 
+    minutes = (time.time() - t0) / 60
     model.save(out / "ppo.zip")
     export_onnx(model, out / "brain.onnx")
-    print("Making the progress video...")
+    print("Making the toy-world progress video...")
     progress_video(out / "progress.mp4", clips)
-    final = checkpoints[-1]["score"]
-    minutes = (time.time() - t0) / 60
+
+    # The same checkpoints (and the hand-written brain, first) chasing in MuJoCo, same balls each.
+    print(f"Playing each checkpoint in MuJoCo for {args.mujoco_seconds:g} s...")
+    walking = hub_policy("velstand.onnx")
+
+    def make_game(brain_file):
+        brain = LearnedBrain(out / brain_file) if brain_file else ChaseBrain()
+        brain.quiet = True
+        return Chase(load_duck(find_rl_repo(), walking), brain, rng=np.random.default_rng(0))
+
+    films = [("hand-written brain", None)] + [(f"after {c['decisions']:,} decisions", c["file"]) for c in checkpoints]
+    per_min = [60 * s["balls_reached"] / s["sim_seconds"]
+               for s in film_in_mujoco(out / "mujoco.mp4", make_game, films, args.mujoco_seconds)]
+    for c, m in zip(checkpoints, per_min[1:]):
+        c["mujoco_score"] = m
+    final, mj_final, mj_base = checkpoints[-1]["score"], per_min[-1], per_min[0]
+
     write_report(
         out / "report.html", title="Learning to chase",
         summary=(f"A small network learned to chase the ball by trial and error (PPO) in the toy world, "
                  f"over {model.num_timesteps:,} decisions ({minutes:.0f} min). It finished at {final:.1f} balls "
-                 f"a minute in the toy world, against {baseline:.1f} for the hand-written brain."),
-        objective=[
+                 f"a minute in the toy world, against {baseline:.1f} for the hand-written brain; in MuJoCo, "
+                 f"{mj_final:.1f} against {mj_base:.1f}."),
+        aim=[
+            ("Goal", "Learn the whole chase brain: walk to the ball as fast as Pollen's walking policy allows, "
+                     "instead of the hand-written steering (chase/brain.py: ChaseBrain)."),
+            ("World", "The toy world (common/toy.py), not MuJoCo: the duck is a point with a heading, the ball a "
+                      "point. Legs are 'lazy' like Pollen's walking policy measured in MuJoCo: nothing below "
+                      "~0.25 m/s or ~0.7 rad/s, ~30% of the commanded forward speed, no sidestep, no walking "
+                      f"backwards. Reaching the ball (the trunk within {CATCH_RADIUS} m of it) drops a new one."),
             ("Sees", "7 numbers, 10 times a second (chase/brain.py: observe): the ball's position relative to "
                      "the duck (ahead, left), its distance, its bearing as sin and cos, and the forward and "
                      "turn command it sent last."),
@@ -171,20 +197,27 @@ def main():
             ("Reward", f"+{PROGRESS:g} per metre it gets closer to the ball (and minus for moving away), "
                        f"+{CATCH_BONUS:g} for reaching it (within {CATCH_RADIUS} m); then a new ball drops "
                        f"{SPAWN_R[0]}-{SPAWN_R[1]} m away and the episode goes on."),
-            ("Episodes", f"{EPISODE_S:g} s in the toy world (common/toy.py) with lazy legs like the real "
-                         "walking policy: nothing below ~0.25 m/s or 0.7 rad/s, ~30% of the commanded speed, "
-                         "no sidestep. Random starting heading and ball position."),
-            ("Algorithm", f"PPO (stable-baselines3), 8 environments in parallel, one update per "
-                          f"{PPO_SETTINGS['n_steps'] * 8:,} decisions, discount {PPO_SETTINGS['gamma']}, "
-                          "default 64-64 network."),
-            ("Score", "balls reached per minute over the same 20 toy-world episodes, running the exported "
-                      "brain exactly as the game does."),
+            ("Episodes", f"{EPISODE_S:g} s, random starting heading and ball position."),
+            ("Considerations", "The toy legs keep their speed while turning hard, and the real ones nearly do: "
+                               "the MuJoCo section shows whether what it learned carries over."),
+        ],
+        training=[
+            ("Decisions", f"{model.num_timesteps:,} (0.1 s of toy time each), in {minutes:.0f} min on the CPU"),
+            ("Updates", f"{len(log.rows)} PPO updates (stable-baselines3), one per {PPO_SETTINGS['n_steps'] * 8:,} "
+                        f"decisions (8 environments), discount {PPO_SETTINGS['gamma']}, default 64-64 network"),
+            ("Checkpoints", f"{len(checkpoints)}, every {chunk:,} decisions: each exported, scored and filmed"),
+            ("Toy score", "balls reached per minute over the same 20 toy-world episodes, running the exported "
+                          "brain exactly as the game does"),
         ],
         checkpoints=checkpoints, rows=log.rows, score_name="balls / min (toy world)", baseline=baseline,
+        mujoco={"video": "mujoco.mp4", "score_name": "balls / min (MuJoCo)", "baseline": mj_base,
+                "seconds": args.mujoco_seconds},
         commands=[f"uv run chase/game.py --brain {out / 'brain.onnx'}",
-                  f"uv run chase/game.py --brain {out / 'brain.onnx'} --headless --duration 180 --video"])
-    print(f"\nSaved to {out}/  (report.html, progress.mp4, brain.onnx, checkpoints/, ppo.zip)")
-    print(f"Toy world, balls / min: learned {final:.1f}, hand-written {baseline:.1f}")
+                  f"uv run chase/game.py --brain {out / 'brain.onnx'} --headless --duration 180 --video",
+                  f"uv run chase/game.py --brain {out / checkpoints[len(checkpoints) // 2]['file']}"])
+    print(f"\nSaved to {out}/  (report.html, progress.mp4, mujoco.mp4, brain.onnx, checkpoints/, ppo.zip)")
+    print(f"Balls / min: toy learned {final:.1f} vs hand-written {baseline:.1f}; "
+          f"MuJoCo learned {mj_final:.1f} vs hand-written {mj_base:.1f}")
     print(f"Watch it: uv run chase/game.py --brain {out / 'brain.onnx'}")
 
 
